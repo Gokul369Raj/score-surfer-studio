@@ -1,1 +1,10 @@
-[FILE_TOO_LARGE]: The combined read_files output exceeded the 100,000 character hard limit. This file was truncated after 0 characters. Read it separately or use code_search for the relevant section.
+// THIS FILE IS READ ONLY. Do not touch this file unless you are correctly adding a new auth provider in accordance to the vly auth documentation
+
+import { convexAuth } from "@convex-dev/auth/server";
+import { Anonymous } from "@convex-dev/auth/providers/Anonymous";
+import { emailOtp } from "./auth/emailOtp";
+
+
+export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
+  providers: [emailOtp, Anonymous],
+});

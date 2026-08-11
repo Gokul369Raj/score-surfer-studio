@@ -1,1 +1,9 @@
-[FILE_TOO_LARGE]: The combined read_files output exceeded the 100,000 character hard limit. This file was truncated after 0 characters. Read it separately or use code_search for the relevant section.
+// VLY Integrations Configuration
+// See /integrations.md for usage documentation
+
+import { createVlyIntegrations } from '@vly-ai/integrations';
+
+export const vly = createVlyIntegrations({
+  deploymentToken: process.env.VLY_INTEGRATION_KEY!,
+  debug: process.env.NODE_ENV === 'development'
+});
