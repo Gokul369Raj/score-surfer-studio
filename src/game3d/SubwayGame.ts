@@ -4,9 +4,9 @@
 // gates, and grab coins before Sir catches up.
 //
 // Characters are fully rigged, procedurally-built 3D models with stylized
-// proportions, detailed faces, structured curly hair, layered clothing and
-// PBR-style materials — built from primitives so they load instantly and
-// stay mobile-friendly (no GLB downloads, no skinning, minimal draw calls).
+// anime proportions, detailed faces, structured curly hair, layered clothing
+// and PBR-style materials — built from primitives so they load instantly and
+// stay mobile-friendly.
 
 import * as THREE from "three";
 
@@ -259,16 +259,18 @@ export class SubwayGame {
   // Sun (moves with player so shadows stay crisp)
   private sun!: THREE.DirectionalLight;
 
-  // TIT billboard texture (cached)
+  // Cached textures / geometries
   private titTexture: THREE.CanvasTexture | null = null;
-
-  // Crash fx
-  private shake = 0;
-
-  // Shared geometry for the character meshes (fewer allocations)
+  private glowTex: THREE.CanvasTexture | null = null;
+  private blobTex: THREE.CanvasTexture | null = null;
+  private gravelTex: THREE.CanvasTexture | null = null;
+  private coinGeo = new THREE.CylinderGeometry(0.3, 0.3, 0.1, 20);
   private geoBox = new THREE.BoxGeometry(1, 1, 1);
   private geoSph = new THREE.SphereGeometry(1, 22, 16);
   private pmatCache = new Map<string, THREE.MeshStandardMaterial>();
+
+  // Crash fx
+  private shake = 0;
 
   constructor(container: HTMLElement, callbacks: GameCallbacks) {
     this.container = container;
@@ -300,7 +302,7 @@ export class SubwayGame {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     // Filmic tone mapping + sRGB gives materials a rich, premium look
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 1.1;
     this.renderer.domElement.style.display = "block";
     this.container.appendChild(this.renderer.domElement);
 
@@ -324,17 +326,18 @@ export class SubwayGame {
     sky.height = 256;
     const g = sky.getContext("2d")!;
     const grad = g.createLinearGradient(0, 0, 0, 256);
-    grad.addColorStop(0, "#3aa0f0");
-    grad.addColorStop(0.45, "#8ed0f8");
-    grad.addColorStop(0.75, "#d9f1fb");
-    grad.addColorStop(1, "#fdf4d8");
+    grad.addColorStop(0, "#2f8fe0");
+    grad.addColorStop(0.4, "#7cc4f6");
+    grad.addColorStop(0.7, "#cdeefb");
+    grad.addColorStop(0.86, "#fdf3d0");
+    grad.addColorStop(1, "#fbe8b4");
     g.fillStyle = grad;
     g.fillRect(0, 0, 2, 256);
     const skyTex = new THREE.CanvasTexture(sky);
     skyTex.colorSpace = THREE.SRGBColorSpace;
     this.scene.background = skyTex;
 
-    this.scene.fog = new THREE.Fog(0xd9f1fb, 55, 170);
+    this.scene.fog = new THREE.Fog(0xe8f3fb, 60, 210);
 
     this.camera = new THREE.PerspectiveCamera(
       62,
@@ -343,14 +346,16 @@ export class SubwayGame {
       0.1,
       400,
     );
-    this.camera.position.set(0, 4.5, 7.2);
-    this.camera.lookAt(0, 1.0, -12);
+    // Cinematic framing — camera closer + lower so the runners fill the
+    // screen like a real mobile endless runner
+    this.camera.position.set(0, 4.0, 6.4);
+    this.camera.lookAt(0, 1.2, -8.5);
 
     // Lights — key + fill + rim so the characters read as part of the world
-    const hemi = new THREE.HemisphereLight(0xfff6e0, 0x9c7c58, 1.15);
+    const hemi = new THREE.HemisphereLight(0xfff6e0, 0x9c7c58, 1.2);
     this.scene.add(hemi);
 
-    this.sun = new THREE.DirectionalLight(0xfff4d8, 1.55);
+    this.sun = new THREE.DirectionalLight(0xfff4d8, 1.7);
     this.sun.position.set(16, 26, 10);
     this.sun.castShadow = true;
     this.sun.shadow.mapSize.set(1024, 1024);
@@ -365,23 +370,46 @@ export class SubwayGame {
     this.scene.add(this.sun.target);
 
     // Cool fill from the opposite side — softens the key light
-    const fill = new THREE.DirectionalLight(0xa8c8ff, 0.5);
+    const fill = new THREE.DirectionalLight(0xa8c8ff, 0.55);
     fill.position.set(-14, 6, 8);
     this.scene.add(fill);
 
     // Warm rim from ahead of the runners — lights their backs so the
     // silhouettes pop against the environment
-    const rim = new THREE.DirectionalLight(0xffe8c0, 0.9);
+    const rim = new THREE.DirectionalLight(0xffe8c0, 0.95);
     rim.position.set(5, 9, -18);
     this.scene.add(rim);
 
-    // Sun disc
+    // Sun disc + soft glow
     const sunDisc = new THREE.Mesh(
       new THREE.SphereGeometry(4, 16, 12),
       new THREE.MeshBasicMaterial({ color: 0xfff3b0 }),
     );
     sunDisc.position.set(-60, 60, -220);
     this.scene.add(sunDisc);
+
+    const glowMat = new THREE.SpriteMaterial({
+      map: this.getGlowTexture(),
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const glow = new THREE.Sprite(glowMat);
+    glow.scale.set(34, 34, 1);
+    glow.position.set(-60, 60, -222);
+    this.scene.add(glow);
+
+    // Distant mountain silhouettes — haze out into the fog for depth
+    for (let i = 0; i < 7; i++) {
+      const m = new THREE.Mesh(
+        new THREE.ConeGeometry(26 + Math.random() * 26, 16 + Math.random() * 14, 4),
+        this.mat(0x9dc3dd),
+      );
+      m.position.set(-130 + i * 42, 0, -185);
+      m.rotation.y = Math.PI / 4;
+      this.scene.add(m);
+    }
   }
 
   private makeNameTexture(text: string, fontPx: number): THREE.CanvasTexture {
@@ -398,10 +426,10 @@ export class SubwayGame {
     g.translate(256, 116);
     g.rotate(-0.05);
     // Soft drop shadow for depth, then the graffiti fill + outline
-    g.fillStyle = "rgba(0,0,0,0.28)";
-    g.fillText(text, 4, 6);
+    g.fillStyle = "rgba(0,0,0,0.3)";
+    g.fillText(text, 5, 7);
     g.strokeStyle = "#111111";
-    g.lineWidth = 14;
+    g.lineWidth = 16;
     g.strokeText(text, 0, 0);
     g.fillStyle = "#141414";
     g.fillText(text, 0, 0);
@@ -409,10 +437,10 @@ export class SubwayGame {
     // Paint drips
     g.fillStyle = "#141414";
     const half = g.measureText(text).width / 2;
-    g.fillRect(256 - half + 30, 192, 6, 32);
-    g.fillRect(256 + 26, 198, 6, 26);
-    g.fillRect(256 + half - 40, 190, 6, 30);
-    g.fillRect(256 - 8, 202, 5, 20);
+    g.fillRect(256 - half + 32, 192, 7, 34);
+    g.fillRect(256 + 28, 198, 7, 28);
+    g.fillRect(256 + half - 42, 190, 7, 32);
+    g.fillRect(256 - 9, 204, 6, 22);
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     return tex;
@@ -435,39 +463,39 @@ export class SubwayGame {
   private rigBase(shoulderX: number): CharacterRig {
     const root = new THREE.Group();
     const hips = new THREE.Group();
-    hips.position.set(0, 1.02, 0);
+    hips.position.set(0, 1.0, 0);
     root.add(hips);
     const chest = new THREE.Group();
-    chest.position.set(0, 0.34, 0);
+    chest.position.set(0, 0.32, 0);
     hips.add(chest);
     const head = new THREE.Group();
-    head.position.set(0, 0.62, 0);
+    head.position.set(0, 0.58, 0);
     chest.add(head);
     const hair = new THREE.Group();
-    hair.position.set(0, 0.03, 0.02);
+    hair.position.set(0, 0.04, 0.01);
     head.add(hair);
 
     const legL = new THREE.Group();
-    legL.position.set(-0.17, 0, 0.02);
+    legL.position.set(-0.15, 0, 0.01);
     const legR = new THREE.Group();
-    legR.position.set(0.17, 0, 0.02);
+    legR.position.set(0.15, 0, 0.01);
     hips.add(legL, legR);
     const legLowerL = new THREE.Group();
-    legLowerL.position.set(0, -0.5, 0);
+    legLowerL.position.set(0, -0.48, 0);
     const legLowerR = new THREE.Group();
-    legLowerR.position.set(0, -0.5, 0);
+    legLowerR.position.set(0, -0.48, 0);
     legL.add(legLowerL);
     legR.add(legLowerR);
 
     const armL = new THREE.Group();
-    armL.position.set(-shoulderX, 0.36, 0);
+    armL.position.set(-shoulderX, 0.3, 0);
     const armR = new THREE.Group();
-    armR.position.set(shoulderX, 0.36, 0);
+    armR.position.set(shoulderX, 0.3, 0);
     chest.add(armL, armR);
     const armLowerL = new THREE.Group();
-    armLowerL.position.set(0, -0.32, 0);
+    armLowerL.position.set(0, -0.3, 0);
     const armLowerR = new THREE.Group();
-    armLowerR.position.set(0, -0.32, 0);
+    armLowerR.position.set(0, -0.3, 0);
     armL.add(armLowerL);
     armR.add(armLowerR);
 
@@ -489,8 +517,8 @@ export class SubwayGame {
   }
 
   private buildGokul(): CharacterRig {
-    const rig = this.rigBase(0.46);
-    const skin = this.pmat(GOKUL_COLORS.skin, { roughness: 0.6 });
+    const rig = this.rigBase(0.38);
+    const skin = this.pmat(GOKUL_COLORS.skin, { roughness: 0.55 });
     const hair = this.pmat(GOKUL_COLORS.hair, { roughness: 0.85 });
     const hairHi = this.pmat(GOKUL_COLORS.hairHi, { roughness: 0.75 });
     const tee = this.pmat(GOKUL_COLORS.tee, { roughness: 0.92 });
@@ -506,82 +534,84 @@ export class SubwayGame {
     const brow = this.pmat(GOKUL_COLORS.brow, { roughness: 0.8 });
 
     // Pelvis + cargo pants
-    const pelvis = this.box(0.36, 0.3, 0.26, pants);
+    const pelvis = this.box(0.33, 0.28, 0.24, pants);
     pelvis.position.set(0, 0.02, 0.01);
     rig.hips.add(pelvis);
 
     for (const side of [-1, 1] as const) {
       const leg = side < 0 ? rig.legL : rig.legR;
       const lower = side < 0 ? rig.legLowerL : rig.legLowerR;
-      const thigh = this.cyl(0.15, 0.12, 0.5, pants);
-      thigh.position.y = -0.25;
+      const thigh = this.cyl(0.13, 0.105, 0.48, pants);
+      thigh.position.y = -0.24;
       leg.add(thigh);
-      const pocket = this.box(0.13, 0.19, 0.07, pants);
-      pocket.position.set(side * 0.13, -0.28, 0.04);
+      const pocket = this.box(0.12, 0.17, 0.06, pants);
+      pocket.position.set(side * 0.11, -0.26, 0.04);
       leg.add(pocket);
-      const cuffM = this.cyl(0.125, 0.115, 0.09, cuff);
-      cuffM.position.y = -0.45;
+      const cuffM = this.cyl(0.11, 0.1, 0.08, cuff);
+      cuffM.position.y = -0.44;
       leg.add(cuffM);
-      const shin = this.cyl(0.115, 0.09, 0.4, pants);
-      shin.position.y = -0.2;
+      const shin = this.cyl(0.1, 0.08, 0.38, pants);
+      shin.position.y = -0.19;
       lower.add(shin);
-      const sockM = this.cyl(0.105, 0.095, 0.14, sock);
-      sockM.position.set(0, -0.36, 0.04);
+      const sockM = this.cyl(0.09, 0.083, 0.13, sock);
+      sockM.position.set(0, -0.34, 0.04);
       lower.add(sockM);
       lower.add(this.buildSneaker(shoe, shoeRed, sole, sock));
     }
 
-    // Oversized white tee — two stacked spheres + hem + black inner collar
-    const chestLow = this.sph(0.37, tee);
-    chestLow.scale.set(1, 0.82, 0.72);
-    chestLow.position.set(0, 0.02, 0.01);
+    // Slim athletic torso — oversized white tee, chest narrower than the head
+    const chestLow = this.sph(0.29, tee, 1, 0.82, 0.66);
+    chestLow.position.set(0, -0.04, 0.01);
     rig.chest.add(chestLow);
-    const chestUp = this.sph(0.36, tee);
-    chestUp.scale.set(1, 0.78, 0.7);
-    chestUp.position.set(0, 0.27, 0);
+    const chestUp = this.sph(0.3, tee, 1, 0.8, 0.64);
+    chestUp.position.set(0, 0.22, 0);
     rig.chest.add(chestUp);
-    const hem = this.cyl(0.355, 0.36, 0.09, tee);
-    hem.position.set(0, -0.02, 0.01);
+    for (const sx of [-1, 1]) {
+      const shoulder = this.sph(0.095, tee);
+      shoulder.position.set(sx * 0.33, 0.27, 0);
+      rig.chest.add(shoulder);
+    }
+    const hem = this.cyl(0.28, 0.285, 0.08, tee);
+    hem.position.set(0, -0.09, 0.01);
     rig.chest.add(hem);
-    const innerM = this.cyl(0.125, 0.12, 0.09, inner);
-    innerM.position.set(0, 0.41, 0);
+    const innerM = this.cyl(0.105, 0.1, 0.08, inner);
+    innerM.position.set(0, 0.4, 0);
     rig.chest.add(innerM);
 
     // "GOKUL" graffiti on the back of the shirt
-    const name = this.namePlate("GOKUL", 0.5, 0.2, 120);
-    name.position.set(0, 0.2, 0.262);
+    const name = this.namePlate("GOKUL", 0.5, 0.22, 120);
+    name.position.set(0, 0.16, 0.205);
     rig.chest.add(name);
 
     // Neck
-    const neck = this.cyl(0.075, 0.085, 0.11, skin);
-    neck.position.set(0, 0.47, 0);
+    const neck = this.cyl(0.055, 0.065, 0.1, skin);
+    neck.position.set(0, 0.44, 0);
     rig.chest.add(neck);
 
     // Arms — short sleeves, wristbands, hands with fingers
     for (const side of [-1, 1] as const) {
       const arm = side < 0 ? rig.armL : rig.armR;
       const lower = side < 0 ? rig.armLowerL : rig.armLowerR;
-      const upper = this.cyl(0.1, 0.088, 0.32, skin);
-      upper.position.y = -0.16;
+      const upper = this.cyl(0.085, 0.072, 0.3, skin);
+      upper.position.y = -0.15;
       arm.add(upper);
-      const sleeve = this.cyl(0.118, 0.11, 0.17, tee);
+      const sleeve = this.cyl(0.1, 0.09, 0.16, tee);
       sleeve.position.y = -0.05;
       arm.add(sleeve);
-      const forearm = this.cyl(0.085, 0.075, 0.28, skin);
-      forearm.position.y = -0.14;
+      const forearm = this.cyl(0.07, 0.06, 0.26, skin);
+      forearm.position.y = -0.13;
       lower.add(forearm);
-      const band = this.cyl(0.095, 0.095, 0.06, wrist);
-      band.position.y = -0.26;
+      const band = this.cyl(0.08, 0.08, 0.055, wrist);
+      band.position.y = -0.23;
       lower.add(band);
       const hand = this.buildHand(skin);
-      hand.position.y = -0.3;
+      hand.position.y = -0.26;
       lower.add(hand);
     }
 
-    // Head + face + structured curly hair
-    const head = this.sph(0.3, skin);
-    head.scale.set(1, 0.95, 0.95);
-    head.position.y = 0.03;
+    // Head + face + structured curly hair (anime proportions)
+    const head = this.sph(0.32, skin, 1, 0.96, 0.94);
+    head.position.y = 0.04;
     rig.head.add(head);
     this.buildFace(rig.head, skin, brow, {});
     this.buildCurlHair(rig.hair, hair, hairHi);
@@ -589,17 +619,17 @@ export class SubwayGame {
     // Silver chain from left hip to back pocket (sways while running)
     const chainGroup = new THREE.Group();
     const hipP = new THREE.Vector3(-0.2, -0.06, 0.02);
-    const pocketP = new THREE.Vector3(-0.02, -0.2, 0.15);
+    const pocketP = new THREE.Vector3(-0.02, -0.18, 0.14);
     const sag = 0.06;
     for (let i = 0; i < 3; i++) {
       const t = (i + 0.5) / 3;
-      const link = this.torus(0.028, 0.009, chain);
+      const link = this.torus(0.026, 0.008, chain);
       const p = hipP.clone().lerp(pocketP, t);
       p.y -= Math.sin(t * Math.PI) * sag;
       link.position.copy(p);
       chainGroup.add(link);
     }
-    const ring = this.torus(0.034, 0.01, chain);
+    const ring = this.torus(0.032, 0.009, chain);
     ring.position.copy(hipP);
     chainGroup.add(ring);
     rig.hips.add(chainGroup);
@@ -609,8 +639,8 @@ export class SubwayGame {
   }
 
   private buildNischay(): CharacterRig {
-    const rig = this.rigBase(0.44);
-    const skin = this.pmat(SIR_COLORS.skin, { roughness: 0.6 });
+    const rig = this.rigBase(0.36);
+    const skin = this.pmat(SIR_COLORS.skin, { roughness: 0.55 });
     const hair = this.pmat(SIR_COLORS.hair, { roughness: 0.85 });
     const hairHi = this.pmat(SIR_COLORS.hairHi, { roughness: 0.75 });
     const shirt = this.pmat(SIR_COLORS.shirt, { roughness: 0.9 });
@@ -633,118 +663,115 @@ export class SubwayGame {
     const glasses = this.pmat(SIR_COLORS.glasses, { roughness: 0.3, metalness: 0.6 });
 
     // Pelvis + trousers + belt
-    const pelvis = this.box(0.34, 0.3, 0.26, pants);
+    const pelvis = this.box(0.32, 0.28, 0.24, pants);
     pelvis.position.set(0, 0.02, 0.01);
     rig.hips.add(pelvis);
-    const beltM = this.box(0.38, 0.07, 0.28, belt);
+    const beltM = this.box(0.35, 0.06, 0.26, belt);
     beltM.position.set(0, 0.0, 0.02);
     rig.hips.add(beltM);
-    const buckleM = this.box(0.06, 0.06, 0.03, buckle);
-    buckleM.position.set(0, 0.0, -0.16);
+    const buckleM = this.box(0.055, 0.055, 0.028, buckle);
+    buckleM.position.set(0, 0.0, -0.15);
     rig.hips.add(buckleM);
 
     for (const side of [-1, 1] as const) {
       const leg = side < 0 ? rig.legL : rig.legR;
       const lower = side < 0 ? rig.legLowerL : rig.legLowerR;
-      const thigh = this.cyl(0.13, 0.105, 0.5, pants);
-      thigh.position.y = -0.25;
+      const thigh = this.cyl(0.115, 0.09, 0.48, pants);
+      thigh.position.y = -0.24;
       leg.add(thigh);
-      const shin = this.cyl(0.1, 0.085, 0.4, pants);
-      shin.position.y = -0.2;
+      const shin = this.cyl(0.09, 0.075, 0.38, pants);
+      shin.position.y = -0.19;
       lower.add(shin);
       lower.add(this.buildFormalShoe(shoe, shoeDark, sole));
     }
 
     // White button-down with a navy tie
-    const chestLow = this.sph(0.35, shirt);
-    chestLow.scale.set(1, 0.8, 0.7);
-    chestLow.position.set(0, 0.02, 0.01);
+    const chestLow = this.sph(0.28, shirt, 1, 0.82, 0.64);
+    chestLow.position.set(0, -0.04, 0.01);
     rig.chest.add(chestLow);
-    const chestUp = this.sph(0.34, shirt);
-    chestUp.scale.set(1, 0.78, 0.7);
-    chestUp.position.set(0, 0.27, 0);
+    const chestUp = this.sph(0.29, shirt, 1, 0.8, 0.62);
+    chestUp.position.set(0, 0.22, 0);
     rig.chest.add(chestUp);
-    const collarBand = this.cyl(0.115, 0.115, 0.07, shirt);
-    collarBand.position.set(0, 0.44, 0);
+    const collarBand = this.cyl(0.1, 0.1, 0.06, shirt);
+    collarBand.position.set(0, 0.42, 0);
     rig.chest.add(collarBand);
-    const tieKnot = this.box(0.075, 0.06, 0.03, tie);
-    tieKnot.position.set(0, 0.42, -0.21);
+    const tieKnot = this.box(0.07, 0.055, 0.03, tie);
+    tieKnot.position.set(0, 0.4, -0.19);
     rig.chest.add(tieKnot);
-    const tieBody = this.box(0.055, 0.24, 0.02, tie);
-    tieBody.position.set(0, 0.27, -0.225);
+    const tieBody = this.box(0.05, 0.22, 0.02, tie);
+    tieBody.position.set(0, 0.26, -0.2);
     rig.chest.add(tieBody);
 
     // "NISCHAY" on the back of the shirt
-    const name = this.namePlate("NISCHAY", 0.56, 0.22, 96);
-    name.position.set(0, 0.2, 0.252);
+    const name = this.namePlate("NISCHAY", 0.56, 0.24, 96);
+    name.position.set(0, 0.16, 0.195);
     rig.chest.add(name);
 
-    const neck = this.cyl(0.07, 0.08, 0.11, skin);
-    neck.position.set(0, 0.47, 0);
+    const neck = this.cyl(0.055, 0.065, 0.1, skin);
+    neck.position.set(0, 0.44, 0);
     rig.chest.add(neck);
 
     // Arms — rolled-up sleeves
     for (const side of [-1, 1] as const) {
       const arm = side < 0 ? rig.armL : rig.armR;
       const lower = side < 0 ? rig.armLowerL : rig.armLowerR;
-      const upper = this.cyl(0.09, 0.08, 0.32, skin);
-      upper.position.y = -0.16;
+      const upper = this.cyl(0.078, 0.068, 0.3, skin);
+      upper.position.y = -0.15;
       arm.add(upper);
-      const sleeve = this.cyl(0.1, 0.09, 0.17, shirt);
-      sleeve.position.y = -0.06;
+      const sleeve = this.cyl(0.09, 0.08, 0.16, shirt);
+      sleeve.position.y = -0.05;
       arm.add(sleeve);
-      const roll = this.cyl(0.102, 0.108, 0.07, shirtRoll);
-      roll.position.y = -0.19;
+      const roll = this.cyl(0.092, 0.098, 0.065, shirtRoll);
+      roll.position.y = -0.18;
       arm.add(roll);
-      const forearm = this.cyl(0.075, 0.068, 0.28, skin);
-      forearm.position.y = -0.14;
+      const forearm = this.cyl(0.065, 0.056, 0.26, skin);
+      forearm.position.y = -0.13;
       lower.add(forearm);
       const hand = this.buildHand(skin);
-      hand.position.y = -0.3;
+      hand.position.y = -0.26;
       lower.add(hand);
     }
     // Black watch on the left wrist
-    const watchBand = this.torus(0.09, 0.025, watch);
+    const watchBand = this.torus(0.078, 0.022, watch);
     watchBand.rotation.x = Math.PI / 2;
-    watchBand.position.set(0, -0.25, 0);
+    watchBand.position.set(0, -0.22, 0);
     rig.armLowerL.add(watchBand);
-    const watchFaceM = this.cyl(0.052, 0.052, 0.02, watchFace);
+    const watchFaceM = this.cyl(0.045, 0.045, 0.018, watchFace);
     watchFaceM.rotation.x = Math.PI / 2;
-    watchFaceM.position.set(0, -0.25, 0.075);
+    watchFaceM.position.set(0, -0.22, 0.065);
     rig.armLowerL.add(watchFaceM);
     // Purple book held in the right hand
-    const bookM = this.box(0.13, 0.19, 0.05, book);
-    bookM.position.set(0, -0.36, -0.02);
+    const bookM = this.box(0.12, 0.18, 0.045, book);
+    bookM.position.set(0, -0.33, -0.02);
     bookM.castShadow = false;
     rig.armLowerR.add(bookM);
-    const edge = this.box(0.14, 0.2, 0.025, bookEdge);
-    edge.position.set(0, -0.36, -0.065);
+    const edge = this.box(0.13, 0.19, 0.022, bookEdge);
+    edge.position.set(0, -0.33, -0.062);
     edge.castShadow = false;
     rig.armLowerR.add(edge);
 
     // Brown messenger bag with a strap across the torso (sways while running)
     const bagGroup = new THREE.Group();
-    bagGroup.position.set(0.3, 0.14, 0.1);
-    const strapM = this.box(0.08, 0.95, 0.05, strap);
-    strapM.position.set(-0.14, 0.2, 0.04);
+    bagGroup.position.set(0.28, 0.12, 0.08);
+    const strapM = this.box(0.07, 0.9, 0.045, strap);
+    strapM.position.set(-0.13, 0.18, 0.03);
     strapM.rotation.z = 0.62;
     bagGroup.add(strapM);
-    const bagBody = this.box(0.3, 0.3, 0.14, bag);
-    bagBody.position.set(0.22, -0.28, 0.04);
+    const bagBody = this.box(0.28, 0.28, 0.13, bag);
+    bagBody.position.set(0.2, -0.26, 0.03);
     bagGroup.add(bagBody);
-    const flapM = this.box(0.32, 0.12, 0.16, bagFlap);
-    flapM.position.set(0.22, -0.14, 0.04);
+    const flapM = this.box(0.3, 0.11, 0.15, bagFlap);
+    flapM.position.set(0.2, -0.13, 0.03);
     bagGroup.add(flapM);
-    const bagBuckle = this.box(0.05, 0.05, 0.04, buckle);
-    bagBuckle.position.set(0.22, -0.19, 0.11);
+    const bagBuckle = this.box(0.045, 0.045, 0.035, buckle);
+    bagBuckle.position.set(0.2, -0.18, 0.1);
     bagGroup.add(bagBuckle);
     rig.chest.add(bagGroup);
     rig.bag = bagGroup;
 
     // Head + face (with glasses) + curly hair with grey streaks
-    const head = this.sph(0.3, skin);
-    head.scale.set(1, 0.95, 0.95);
-    head.position.y = 0.03;
+    const head = this.sph(0.32, skin, 1, 0.96, 0.94);
+    head.position.y = 0.04;
     rig.head.add(head);
     this.buildFace(rig.head, skin, brow, { glasses: true, glassesFrame: glasses });
     this.buildCurlHair(rig.hair, hair, hairHi);
@@ -754,15 +781,15 @@ export class SubwayGame {
 
   private buildHand(skin: THREE.Material): THREE.Group {
     const g = new THREE.Group();
-    const palm = this.box(0.13, 0.11, 0.1, skin);
+    const palm = this.box(0.115, 0.1, 0.09, skin);
     g.add(palm);
     for (let i = 0; i < 3; i++) {
-      const f = this.box(0.035, 0.05, 0.034, skin);
-      f.position.set(-0.033 + i * 0.033, -0.078, 0.012);
+      const f = this.box(0.032, 0.05, 0.032, skin);
+      f.position.set(-0.03 + i * 0.03, -0.072, 0.012);
       g.add(f);
     }
-    const thumb = this.box(0.042, 0.046, 0.034, skin);
-    thumb.position.set(0.064, -0.028, -0.01);
+    const thumb = this.box(0.04, 0.044, 0.032, skin);
+    thumb.position.set(0.058, -0.026, -0.01);
     thumb.rotation.z = 0.55;
     g.add(thumb);
     return g;
@@ -776,57 +803,52 @@ export class SubwayGame {
   ): void {
     for (const sx of [-1, 1]) {
       // Eye whites
-      const sclera = this.sph(0.052, this.pmat(0xffffff, { roughness: 0.3 }));
-      sclera.scale.set(1, 1.35, 0.5);
-      sclera.position.set(sx * 0.105, 0.05, -0.26);
+      const sclera = this.sph(0.05, this.pmat(0xffffff, { roughness: 0.3 }), 1, 1.35, 0.5);
+      sclera.position.set(sx * 0.115, 0.05, -0.275);
       head.add(sclera);
       // Iris
-      const iris = this.sph(0.032, this.pmat(0x2b2440, { roughness: 0.25 }));
-      iris.scale.set(1, 1, 0.4);
-      iris.position.set(sx * 0.105, 0.055, -0.283);
+      const iris = this.sph(0.03, this.pmat(0x2b2440, { roughness: 0.25 }), 1, 1, 0.4);
+      iris.position.set(sx * 0.115, 0.055, -0.3);
       head.add(iris);
       // Catch-light
-      const glint = this.sph(0.011, this.pmat(0xffffff, { roughness: 0.1 }));
-      glint.scale.set(1, 1, 0.4);
-      glint.position.set(sx * 0.09, 0.068, -0.29);
+      const glint = this.sph(0.011, this.pmat(0xffffff, { roughness: 0.1 }), 1, 1, 0.4);
+      glint.position.set(sx * 0.1, 0.07, -0.305);
       head.add(glint);
       // Eyebrow
-      const b = this.box(0.09, 0.024, 0.02, brow);
-      b.position.set(sx * 0.105, 0.135, -0.27);
+      const b = this.box(0.095, 0.024, 0.02, brow);
+      b.position.set(sx * 0.115, 0.14, -0.285);
       b.rotation.z = -sx * 0.18;
       head.add(b);
       // Ear
-      const ear = this.sph(0.06, skin);
-      ear.scale.set(0.5, 0.85, 0.55);
-      ear.position.set(sx * 0.285, 0.02, -0.01);
+      const ear = this.sph(0.055, skin, 0.5, 0.85, 0.55);
+      ear.position.set(sx * 0.3, 0.02, -0.01);
       head.add(ear);
     }
     // Nose
-    const nose = this.sph(0.036, skin);
-    nose.scale.set(0.78, 1.15, 0.55);
-    nose.position.set(0, -0.02, -0.29);
+    const nose = this.sph(0.035, skin, 0.8, 1.15, 0.55);
+    nose.position.set(0, -0.03, -0.305);
     head.add(nose);
     // Smile
     const smile = new THREE.Mesh(
       new THREE.TorusGeometry(0.05, 0.011, 6, 14, Math.PI, Math.PI),
       this.pmat(GOKUL_COLORS.mouth, { roughness: 0.6 }),
     );
-    smile.position.set(0, -0.1, -0.275);
+    smile.position.set(0, -0.11, -0.29);
     smile.rotation.x = -0.1;
     head.add(smile);
     // Glasses (Nischay)
     if (o.glasses && o.glassesFrame) {
       for (const sx of [-1, 1]) {
         const frame = this.torus(0.058, 0.014, o.glassesFrame);
-        frame.position.set(sx * 0.115, 0.055, -0.26);
+        frame.position.set(sx * 0.125, 0.06, -0.28);
         head.add(frame);
       }
-      const bridge = this.box(0.055, 0.02, 0.014, o.glassesFrame);
-      bridge.position.set(0, 0.055, -0.26);
+      const bridge = this.box(0.06, 0.02, 0.014, o.glassesFrame);
+      bridge.position.set(0, 0.06, -0.28);
       head.add(bridge);
       for (const sx of [-1, 1]) {
         const temple = this.box(0.02, 0.016, 0.13, o.glassesFrame);
-        temple.position.set(sx * 0.115, 0.055, -0.2);
+        temple.position.set(sx * 0.125, 0.06, -0.22);
         head.add(temple);
       }
     }
@@ -837,46 +859,43 @@ export class SubwayGame {
     hair: THREE.Material,
     hi: THREE.Material,
   ): void {
-    // Base cap
-    const cap = this.sph(0.31, hair);
-    cap.scale.set(1.04, 0.85, 1.03);
-    cap.position.set(0, 0.1, 0);
+    // Smooth base cap — clean silhouette instead of a lumpy cloud
+    const cap = this.sph(0.33, hair, 1.05, 0.8, 1.03);
+    cap.position.set(0, 0.09, 0);
     group.add(cap);
-    // Structured curls — layered rings + back mass so the silhouette reads
+    // Structured curls — layered rings + back mass
     const spots: Array<[number, number, number, number]> = [
-      [0, 0.26, 0, 0.14], // crown
-      [0, 0.22, -0.13, 0.115],
-      [0.11, 0.23, -0.07, 0.11],
-      [-0.11, 0.23, -0.07, 0.11],
-      [0.12, 0.23, 0.06, 0.11],
-      [-0.12, 0.23, 0.06, 0.11],
-      [0.19, 0.17, -0.06, 0.12],
-      [-0.19, 0.17, -0.06, 0.12],
-      [0.2, 0.17, 0.06, 0.12],
-      [-0.2, 0.17, 0.06, 0.12],
-      [0.12, 0.2, 0.13, 0.115],
-      [-0.12, 0.2, 0.13, 0.115],
-      [0, 0.18, 0.16, 0.12],
-      [0.07, 0.12, 0.2, 0.13],
-      [-0.07, 0.12, 0.2, 0.13],
-      [0, 0.16, 0.13, 0.135],
+      [0, 0.26, 0, 0.125], // crown
+      [0, 0.22, -0.13, 0.105],
+      [0.11, 0.23, -0.07, 0.1],
+      [-0.11, 0.23, -0.07, 0.1],
+      [0.12, 0.23, 0.06, 0.1],
+      [-0.12, 0.23, 0.06, 0.1],
+      [0.19, 0.16, -0.06, 0.105],
+      [-0.19, 0.16, -0.06, 0.105],
+      [0.2, 0.16, 0.06, 0.105],
+      [-0.2, 0.16, 0.06, 0.105],
+      [0.12, 0.2, 0.13, 0.1],
+      [-0.12, 0.2, 0.13, 0.1],
+      [0, 0.18, 0.16, 0.105],
+      [0.07, 0.12, 0.2, 0.115],
+      [-0.07, 0.12, 0.2, 0.115],
+      [0, 0.16, 0.13, 0.12],
     ];
     for (const [x, y, z, r] of spots) {
-      const c = this.sph(r, hair);
-      c.scale.set(1.08, 0.82, 1.05);
+      const c = this.sph(r, hair, 1.08, 0.82, 1.05);
       c.position.set(x, y, z);
       group.add(c);
     }
     // Highlight curls on top for controlled sheen
     const hiSpots: Array<[number, number, number, number]> = [
-      [0, 0.28, 0.03, 0.075],
-      [0.07, 0.27, -0.02, 0.06],
-      [-0.07, 0.27, -0.02, 0.06],
-      [0, 0.27, 0.09, 0.06],
+      [0, 0.28, 0.03, 0.07],
+      [0.07, 0.27, -0.02, 0.055],
+      [-0.07, 0.27, -0.02, 0.055],
+      [0, 0.27, 0.09, 0.055],
     ];
     for (const [x, y, z, r] of hiSpots) {
-      const c = this.sph(r, hi);
-      c.scale.set(1, 0.8, 1);
+      const c = this.sph(r, hi, 1, 0.8, 1);
       c.position.set(x, y, z);
       group.add(c);
     }
@@ -889,26 +908,25 @@ export class SubwayGame {
     sock: THREE.Material,
   ): THREE.Group {
     const g = new THREE.Group();
-    const soleM = this.box(0.3, 0.07, 0.47, sole);
-    soleM.position.set(0, -0.045, 0.06);
+    const soleM = this.box(0.27, 0.06, 0.44, sole);
+    soleM.position.set(0, -0.04, 0.06);
     g.add(soleM);
-    const upper = this.box(0.26, 0.12, 0.36, shoe);
+    const upper = this.box(0.235, 0.11, 0.33, shoe);
     upper.position.set(0, 0.02, 0.02);
     g.add(upper);
-    const toe = this.sph(0.09, shoe);
-    toe.scale.set(1, 0.82, 1.12);
-    toe.position.set(0, 0.01, 0.2);
+    const toe = this.sph(0.08, shoe, 1, 0.82, 1.12);
+    toe.position.set(0, 0.01, 0.19);
     g.add(toe);
-    const heel = this.box(0.24, 0.11, 0.09, shoeRed);
-    heel.position.set(0, 0.02, 0.29);
+    const heel = this.box(0.22, 0.1, 0.08, shoeRed);
+    heel.position.set(0, 0.02, 0.27);
     g.add(heel);
-    const lace = this.box(0.02, 0.07, 0.22, shoe);
-    lace.position.set(0, 0.09, 0.04);
+    const lace = this.box(0.02, 0.065, 0.2, shoe);
+    lace.position.set(0, 0.085, 0.04);
     g.add(lace);
-    const sockLip = this.box(0.23, 0.05, 0.3, sock);
-    sockLip.position.set(0, 0.09, 0.02);
+    const sockLip = this.box(0.21, 0.045, 0.28, sock);
+    sockLip.position.set(0, 0.085, 0.02);
     g.add(sockLip);
-    g.position.y = -0.42;
+    g.position.y = -0.4;
     return g;
   }
 
@@ -918,20 +936,19 @@ export class SubwayGame {
     sole: THREE.Material,
   ): THREE.Group {
     const g = new THREE.Group();
-    const soleM = this.box(0.29, 0.06, 0.45, sole);
-    soleM.position.set(0, -0.045, 0.06);
+    const soleM = this.box(0.26, 0.05, 0.42, sole);
+    soleM.position.set(0, -0.04, 0.06);
     g.add(soleM);
-    const upper = this.box(0.25, 0.11, 0.35, shoe);
+    const upper = this.box(0.225, 0.1, 0.32, shoe);
     upper.position.set(0, 0.02, 0.02);
     g.add(upper);
-    const toe = this.sph(0.085, shoe);
-    toe.scale.set(1, 0.82, 1.1);
-    toe.position.set(0, 0.01, 0.19);
+    const toe = this.sph(0.075, shoe, 1, 0.82, 1.1);
+    toe.position.set(0, 0.01, 0.18);
     g.add(toe);
-    const heel = this.box(0.23, 0.1, 0.09, dark);
-    heel.position.set(0, 0.02, 0.28);
+    const heel = this.box(0.21, 0.09, 0.08, dark);
+    heel.position.set(0, 0.02, 0.26);
     g.add(heel);
-    g.position.y = -0.42;
+    g.position.y = -0.4;
     return g;
   }
 
@@ -940,17 +957,13 @@ export class SubwayGame {
     this.playerRig = rig;
     this.player = rig.root;
 
-    // Shadow blob for crisp ground contact
+    // Soft gradient shadow blob — grounds the character without a hard disc
     this.shadowMat = new THREE.MeshBasicMaterial({
-      color: 0x000000,
+      map: this.getBlobTexture(),
       transparent: true,
-      opacity: 0.28,
       depthWrite: false,
     });
-    this.shadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.55, 24),
-      this.shadowMat,
-    );
+    this.shadow = new THREE.Mesh(new THREE.CircleGeometry(0.62, 24), this.shadowMat);
     this.shadow.rotation.x = -Math.PI / 2;
     this.shadow.position.y = 0.02;
     this.scene.add(this.shadow);
@@ -965,15 +978,11 @@ export class SubwayGame {
     this.chaser = rig.root;
 
     this.chaserShadowMat = new THREE.MeshBasicMaterial({
-      color: 0x000000,
+      map: this.getBlobTexture(),
       transparent: true,
-      opacity: 0.22,
       depthWrite: false,
     });
-    this.chaserShadow = new THREE.Mesh(
-      new THREE.CircleGeometry(0.5, 24),
-      this.chaserShadowMat,
-    );
+    this.chaserShadow = new THREE.Mesh(new THREE.CircleGeometry(0.56, 24), this.chaserShadowMat);
     this.chaserShadow.rotation.x = -Math.PI / 2;
     this.chaserShadow.position.y = 0.02;
     this.scene.add(this.chaserShadow);
@@ -983,7 +992,7 @@ export class SubwayGame {
   }
 
   private initEnvironment(): void {
-    // Ground
+    // Outer ground
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(400, 400),
       this.mat(0xd8bd8e),
@@ -993,24 +1002,32 @@ export class SubwayGame {
     ground.receiveShadow = true;
     this.scene.add(ground);
 
-    // Track platform
-    const platform = new THREE.Mesh(
-      new THREE.BoxGeometry(13.5, 0.24, 240),
-      this.mat(0xc9b78f),
+    // Gravel track bed under the rails (textured, not flat)
+    const bed = new THREE.Mesh(
+      new THREE.PlaneGeometry(15.5, 240),
+      new THREE.MeshLambertMaterial({ map: this.getGravelTexture() }),
     );
-    platform.position.set(0, 0, -80);
-    platform.receiveShadow = true;
-    this.scene.add(platform);
+    bed.rotation.x = -Math.PI / 2;
+    bed.position.set(0, 0.005, -80);
+    bed.receiveShadow = true;
+    this.scene.add(bed);
 
     // Rails
     const railMat = this.mat(0x9aa0a6);
+    const railTopMat = this.mat(0xcdd2d6);
     for (const rx of [-3.9, -1.3, 1.3, 3.9]) {
       const rail = new THREE.Mesh(
-        new THREE.BoxGeometry(0.16, 0.1, 240),
+        new THREE.BoxGeometry(0.16, 0.12, 240),
         railMat,
       );
-      rail.position.set(rx, 0.14, -80);
+      rail.position.set(rx, 0.13, -80);
       this.scene.add(rail);
+      const top = new THREE.Mesh(
+        new THREE.BoxGeometry(0.13, 0.04, 240),
+        railTopMat,
+      );
+      top.position.set(rx, 0.21, -80);
+      this.scene.add(top);
     }
 
     // Sleepers (recycled)
@@ -1074,7 +1091,91 @@ export class SubwayGame {
     }
   }
 
-  // ── Helpers ─────────────────────────────────────────────────────────
+  // ── Textures / helpers ─────────────────────────────────────────────
+
+  private getGlowTexture(): THREE.CanvasTexture {
+    if (this.glowTex) return this.glowTex;
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const g = c.getContext("2d")!;
+    const grad = g.createRadialGradient(64, 64, 4, 64, 64, 64);
+    grad.addColorStop(0, "rgba(255,244,200,0.95)");
+    grad.addColorStop(0.4, "rgba(255,236,160,0.35)");
+    grad.addColorStop(1, "rgba(255,236,160,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 128, 128);
+    this.glowTex = new THREE.CanvasTexture(c);
+    return this.glowTex;
+  }
+
+  private getBlobTexture(): THREE.CanvasTexture {
+    if (this.blobTex) return this.blobTex;
+    const c = document.createElement("canvas");
+    c.width = 64;
+    c.height = 64;
+    const g = c.getContext("2d")!;
+    const grad = g.createRadialGradient(32, 32, 4, 32, 32, 32);
+    grad.addColorStop(0, "rgba(0,0,0,0.5)");
+    grad.addColorStop(0.55, "rgba(0,0,0,0.34)");
+    grad.addColorStop(1, "rgba(0,0,0,0)");
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    this.blobTex = new THREE.CanvasTexture(c);
+    return this.blobTex;
+  }
+
+  private getGravelTexture(): THREE.CanvasTexture {
+    if (this.gravelTex) return this.gravelTex;
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const g = c.getContext("2d")!;
+    g.fillStyle = "#a4906c";
+    g.fillRect(0, 0, 128, 128);
+    for (let i = 0; i < 950; i++) {
+      const x = Math.random() * 128;
+      const y = Math.random() * 128;
+      const r = 1 + Math.random() * 1.7;
+      const v = 55 + Math.random() * 130;
+      g.fillStyle = `rgba(${v},${v * 0.9},${v * 0.6},0.6)`;
+      g.beginPath();
+      g.arc(x, y, r, 0, Math.PI * 2);
+      g.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(3, 24);
+    this.gravelTex = tex;
+    return tex;
+  }
+
+  private makeGraffitiTexture(): THREE.CanvasTexture {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 128;
+    const g = c.getContext("2d")!;
+    g.fillStyle = "#101014";
+    g.fillRect(0, 0, 256, 128);
+    const colors = ["#ffd43b", "#ff6b6b", "#4dabf7", "#69db7c", "#e599f7", "#ffa94d"];
+    for (let i = 0; i < 7; i++) {
+      g.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+      g.globalAlpha = 0.85;
+      g.beginPath();
+      g.arc(25 + Math.random() * 205, 18 + Math.random() * 92, 10 + Math.random() * 18, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+    g.fillStyle = "#ffffff";
+    g.font = "italic 900 44px 'Arial Black', Arial, sans-serif";
+    g.textAlign = "center";
+    g.fillText("TIT", 128, 70);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+  }
 
   private mat(color: number): THREE.MeshLambertMaterial {
     return new THREE.MeshLambertMaterial({ color });
@@ -1085,20 +1186,28 @@ export class SubwayGame {
     opts: {
       roughness?: number;
       metalness?: number;
+      emissive?: number;
+      emissiveIntensity?: number;
       map?: THREE.Texture;
       transparent?: boolean;
       opacity?: number;
     } = {},
   ): THREE.MeshStandardMaterial {
     const key = `${color}|${opts.roughness ?? 0.75}|${opts.metalness ?? 0}|${
-      opts.map?.uuid ?? ""
-    }|${opts.transparent ? 1 : 0}|${opts.opacity ?? 1}`;
+      opts.emissive ?? 0
+    }|${opts.emissiveIntensity ?? 0}|${opts.map?.uuid ?? ""}|${
+      opts.transparent ? 1 : 0
+    }|${opts.opacity ?? 1}`;
     let m = this.pmatCache.get(key);
     if (!m) {
       m = new THREE.MeshStandardMaterial({
         color,
         roughness: opts.roughness ?? 0.75,
         metalness: opts.metalness ?? 0,
+        ...(opts.emissive ? { emissive: opts.emissive } : {}),
+        ...(opts.emissiveIntensity !== undefined
+          ? { emissiveIntensity: opts.emissiveIntensity }
+          : {}),
         ...(opts.map ? { map: opts.map } : {}),
         ...(opts.transparent ? { transparent: true } : {}),
         ...(opts.opacity !== undefined ? { opacity: opts.opacity } : {}),
@@ -1120,9 +1229,17 @@ export class SubwayGame {
     return mesh;
   }
 
-  private sph(r: number, material: THREE.Material): THREE.Mesh {
+  // Shared unit sphere scaled per-axis — callers pass (r, sx, sy, sz) so the
+  // radius is never overwritten by a later scale.set()
+  private sph(
+    r: number,
+    material: THREE.Material,
+    sx = 1,
+    sy = 1,
+    sz = 1,
+  ): THREE.Mesh {
     const mesh = new THREE.Mesh(this.geoSph, material);
-    mesh.scale.setScalar(r);
+    mesh.scale.set(r * sx, r * sy, r * sz);
     mesh.castShadow = true;
     return mesh;
   }
@@ -1163,13 +1280,20 @@ export class SubwayGame {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
 
-    // Window grid
-    const winMat = this.mat(0xffffff);
+    // Roof slab
+    const roof = this.box(w + 0.7, 0.6, d + 0.7, this.mat(0x7a8894));
+    roof.position.y = h + 0.3;
+    roof.receiveShadow = true;
+    mesh.add(roof);
+
+    // Window grid — some windows lit, some off
     const windows: THREE.Mesh[] = [];
     const cols = Math.floor(w / 1.3);
     const rows = Math.floor(h / 1.6);
     for (let c = 0; c < cols; c++) {
       for (let r = 0; r < rows; r++) {
+        const lit = Math.random() < 0.22;
+        const winMat = this.mat(lit ? 0xffe9a8 : 0xdfe6ee);
         const win = new THREE.Mesh(
           new THREE.BoxGeometry(0.55, 0.8, 0.06),
           winMat,
@@ -1318,7 +1442,6 @@ export class SubwayGame {
     }
     for (const c of this.coins) {
       this.scene.remove(c.mesh);
-      c.mesh.geometry.dispose();
     }
     for (const p of this.particles) {
       this.scene.remove(p.mesh);
@@ -1344,7 +1467,7 @@ export class SubwayGame {
     this.applyPose(this.chaserRig, this.idlePose(0));
 
     // Reset camera + FOV
-    this.camera.position.set(0, 4.5, 7.2);
+    this.camera.position.set(0, 4.0, 6.4);
     this.camera.fov = 62;
     this.camera.updateProjectionMatrix();
 
@@ -1423,26 +1546,26 @@ export class SubwayGame {
     };
   }
 
+  // Exaggerated, lively run cycle — deep strides, heel kick, torso twist
   private runPose(t: number, amp: number): RigPose {
     const s = Math.sin(t);
     const c = Math.cos(t);
-    const hipL = s * 0.8 * amp;
-    const hipR = -s * 0.8 * amp;
-    // Knees fold as each leg swings — natural heel lift
-    const kneeL = Math.max(0, Math.sin(t + 0.9)) * 1.2 * amp;
-    const kneeR = Math.max(0, Math.sin(t + 0.9 + Math.PI)) * 1.2 * amp;
+    const hipL = s * 0.95 * amp;
+    const hipR = -s * 0.95 * amp;
+    const kneeL = Math.max(0, Math.sin(t + 0.9)) * 1.35 * amp;
+    const kneeR = Math.max(0, Math.sin(t + 0.9 + Math.PI)) * 1.35 * amp;
     return {
       hipL,
       hipR,
       kneeL,
       kneeR,
-      shL: -hipL * 0.85,
-      shR: -hipR * 0.85,
-      elL: 0.7 + c * 0.2,
-      elR: 0.7 - c * 0.2,
-      torsoX: -0.05 + Math.abs(s) * 0.05,
-      torsoZ: s * 0.09,
-      headX: c * 0.05,
+      shL: -hipL * 0.9,
+      shR: -hipR * 0.9,
+      elL: 0.75 + c * 0.22,
+      elR: 0.75 - c * 0.22,
+      torsoX: -0.06 + Math.abs(s) * 0.06,
+      torsoZ: s * 0.12,
+      headX: c * 0.06,
     };
   }
 
@@ -1515,15 +1638,15 @@ export class SubwayGame {
   private applySecondary(rig: CharacterRig, t: number): void {
     const s = Math.sin(t * 0.9);
     const c = Math.cos(t * 0.9);
-    rig.hair.rotation.z = s * 0.09;
+    rig.hair.rotation.z = s * 0.1;
     rig.hair.rotation.x = c * 0.03;
-    rig.chest.position.y = 0.34 + Math.abs(s) * 0.012;
+    rig.chest.position.y = 0.32 + Math.abs(s) * 0.013;
     if (rig.chain) {
-      rig.chain.rotation.x = 0.14 + s * 0.2;
+      rig.chain.rotation.x = 0.14 + s * 0.22;
       rig.chain.rotation.z = c * 0.1;
     }
     if (rig.bag) {
-      rig.bag.rotation.z = s * 0.1;
+      rig.bag.rotation.z = s * 0.11;
       rig.bag.rotation.x = -c * 0.05;
     }
   }
@@ -1675,8 +1798,13 @@ export class SubwayGame {
     }
 
     const stumble = this.knockT > 0 ? Math.sin(this.knockT * 28) * 0.14 : 0;
+    // Run bounce while on the ground — livelier stride
+    const runBob =
+      this.onGround && !sliding && this.knockT <= 0
+        ? Math.abs(Math.sin(this.runPhase * 0.9)) * 0.09
+        : 0;
     this.player.position.x = this.x;
-    this.player.position.y = this.jumpY;
+    this.player.position.y = this.jumpY + runBob;
     this.player.rotation.x = pitch;
     this.player.rotation.y = 0;
     this.player.rotation.z = (sliding ? lean * 0.4 : lean) + stumble;
@@ -1685,7 +1813,6 @@ export class SubwayGame {
     this.shadow.position.x = this.x;
     const shadowScale = Math.max(0.45, 1 - this.jumpY * 0.055);
     this.shadow.scale.set(shadowScale, shadowScale, 1);
-    this.shadowMat.opacity = 0.28 - this.jumpY * 0.02;
 
     // Nischay Sir keeps pace right behind, mirroring Gokul
     this.chaser.position.x = this.x;
@@ -1754,24 +1881,24 @@ export class SubwayGame {
     this.updateParticles(dt);
 
     // Chase camera gently follows the player's lane
-    const targetCamX = this.x * 0.55;
+    const targetCamX = this.x * 0.5;
     this.camX += (targetCamX - this.camX) * Math.min(1, dt * 5);
-    this.camera.position.z = 7.2;
+    this.camera.position.z = 6.4;
 
     // Camera shake on crash
     if (this.shake > 0) {
       this.shake -= dt;
-      this.camera.position.x = this.camX + (Math.random() - 0.5) * 0.35;
-      this.camera.position.y = 4.5 + (Math.random() - 0.5) * 0.3;
+      this.camera.position.x = this.camX + (Math.random() - 0.5) * 0.32;
+      this.camera.position.y = 4.0 + (Math.random() - 0.5) * 0.28;
     } else {
       this.camera.position.x = this.camX;
-      this.camera.position.y = 4.5;
+      this.camera.position.y = 4.0;
     }
-    this.camera.lookAt(this.camX, 1.0, -12);
+    this.camera.lookAt(this.camX, 1.2, -8.5);
 
     // FOV widens slightly with speed for a rush of speed
     const targetFov =
-      62 + ((this.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)) * 5;
+      62 + ((this.speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED)) * 6;
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
       this.camera.fov += (targetFov - this.camera.fov) * Math.min(1, dt * 2.5);
       this.camera.updateProjectionMatrix();
@@ -1873,7 +2000,6 @@ export class SubwayGame {
     this.coins = this.coins.filter((c) => {
       if (c.taken || c.z > DESPAWN_Z) {
         this.scene.remove(c.mesh);
-        c.mesh.geometry.dispose();
         return false;
       }
       return true;
@@ -1961,6 +2087,7 @@ export class SubwayGame {
       stripe.position.y = 0.55;
       group.add(stripe);
 
+      // Windows on the sides
       const winMat = this.mat(0x9ad0f5);
       for (let i = 0; i < 3; i++) {
         const win = this.box(w * 0.72, 1.0, 0.08, winMat);
@@ -1969,6 +2096,21 @@ export class SubwayGame {
         const win2 = win.clone();
         win2.position.z = d / 2 - 1 - i * 1.8;
         group.add(win2);
+      }
+
+      // Graffiti panels on both faces
+      const grafMat = new THREE.MeshLambertMaterial({
+        map: this.makeGraffitiTexture(),
+      });
+      for (const sz of [-1, 1]) {
+        const panel = new THREE.Mesh(
+          new THREE.PlaneGeometry(w * 0.85, 2.1),
+          grafMat,
+        );
+        panel.position.set(0, 1.95, sz * (d / 2 + 0.02));
+        panel.rotation.y = sz * (Math.PI / 2);
+        panel.castShadow = false;
+        group.add(panel);
       }
 
       // Wheels
@@ -2047,15 +2189,15 @@ export class SubwayGame {
     );
     if (blocked) return;
 
+    const gold = this.pmat(0xffd257, {
+      roughness: 0.3,
+      metalness: 0.85,
+      emissive: 0x8a5a00,
+      emissiveIntensity: 0.35,
+    });
     const count = 4 + Math.floor(Math.random() * 3);
     for (let i = 0; i < count; i++) {
-      const coin = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.28, 0.28, 0.09, 20),
-        new THREE.MeshLambertMaterial({
-          color: 0xffc300,
-          emissive: 0x664d00,
-        }),
-      );
+      const coin = new THREE.Mesh(this.coinGeo, gold);
       coin.rotation.x = Math.PI / 2;
       coin.position.set(LANE_X[lane], 1.05, SPAWN_Z - i * 2.4);
       this.scene.add(coin);
@@ -2218,8 +2360,15 @@ export class SubwayGame {
       const mesh = obj as THREE.Mesh;
       if (mesh.geometry) mesh.geometry.dispose();
       const m = mesh.material as THREE.Material | THREE.Material[] | undefined;
-      if (Array.isArray(m)) m.forEach((mm) => mm.dispose());
-      else if (m) m.dispose();
+      if (Array.isArray(m)) {
+        m.forEach((mm) => {
+          mm.dispose();
+          (mm as THREE.MeshLambertMaterial).map?.dispose();
+        });
+      } else if (m) {
+        m.dispose();
+        (m as THREE.MeshLambertMaterial).map?.dispose();
+      }
     });
   }
 

@@ -309,9 +309,9 @@ export default function SubwayGameView({
         )}
       </AnimatePresence>
 
-      {/* ── Ready screen ── */}
+      {/* ── Ready screen — semi-transparent so the 3D scene shows through ── */}
       {phase === "ready" && !fatal && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-[#081c44]/95 via-[#0e2f6d]/90 to-[#081c44]/95 backdrop-blur-[2px]">
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-[#081c44]/65 via-[#0e2f6d]/45 to-[#081c44]/65">
           <div className="max-w-md px-6 text-center">
             <div className="mb-5 inline-block rounded-full border border-orange-300/40 bg-orange-400/10 px-4 py-1.5 text-[10px] font-black tracking-[0.35em] text-orange-300">
               TIT BHOPAL · ENDLESS CHASE
@@ -367,9 +367,9 @@ export default function SubwayGameView({
         </div>
       )}
 
-      {/* ── Game over screen ── */}
+      {/* ── Game over screen — semi-transparent so the scene shows through ── */}
       {phase === "over" && !fatal && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-[#0a1228]/95 via-[#0e2f6d]/90 to-[#0a1228]/95 backdrop-blur-[2px]">
+        <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-[#0a1228]/70 via-[#0e2f6d]/50 to-[#0a1228]/70">
           <div className="w-full max-w-md px-6 text-center">
             <div className="mb-4 inline-block rounded-full border border-orange-300/40 bg-orange-400/10 px-4 py-1.5 text-[10px] font-black tracking-[0.35em] text-orange-300">
               {newBest ? "NEW RECORD" : "CAUGHT!"}
