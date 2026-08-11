@@ -399,17 +399,6 @@ export class SubwayGame {
     glow.scale.set(34, 34, 1);
     glow.position.set(-60, 60, -222);
     this.scene.add(glow);
-
-    // Distant mountain silhouettes — haze out into the fog for depth
-    for (let i = 0; i < 7; i++) {
-      const m = new THREE.Mesh(
-        new THREE.ConeGeometry(26 + Math.random() * 26, 16 + Math.random() * 14, 4),
-        this.mat(0x9dc3dd),
-      );
-      m.position.set(-130 + i * 42, 0, -185);
-      m.rotation.y = Math.PI / 4;
-      this.scene.add(m);
-    }
   }
 
   private makeNameTexture(text: string, fontPx: number): THREE.CanvasTexture {
@@ -1044,22 +1033,27 @@ export class SubwayGame {
       this.sleepers.push(s);
     }
 
-    // Buildings on both sides (recycled)
-    const SIDE_SPACING = 9;
+    // Buildings on both sides — far from the track with gaps between them so
+    // the skyline stays open instead of forming solid walls (recycled)
+    const SIDE_SPACING = 24;
     for (let side = -1; side <= 1; side += 2) {
-      for (let i = 0; i < 16; i++) {
+      for (let i = 0; i < 10; i++) {
+        if (Math.random() < 0.22) continue; // leave gaps in the skyline
         this.buildings.push(
-          this.makeBuilding(side * (16 + Math.random() * 8), -i * SIDE_SPACING + 14),
+          this.makeBuilding(
+            side * (26 + Math.random() * 8),
+            -i * SIDE_SPACING + 14 + (Math.random() - 0.5) * 6,
+          ),
         );
       }
     }
 
-    // Trees
+    // Trees — kept clear of the track
     for (let i = 0; i < 20; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const t = this.makeTree();
       t.position.set(
-        side * (9.5 + Math.random() * 3.5),
+        side * (12 + Math.random() * 4),
         0,
         -i * 9 - Math.random() * 4,
       );
@@ -1067,12 +1061,12 @@ export class SubwayGame {
       this.trees.push(t);
     }
 
-    // TIT Bhopal ad billboards along the track (recycled)
+    // TIT Bhopal ad billboards — set back from the track so they don't crowd it
     for (let i = 0; i < BILLBOARD_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       this.billboards.push(
         this.makeBillboard(
-          side * (7.4 + Math.random() * 1.2),
+          side * (11 + Math.random() * 2),
           -i * BILLBOARD_SPACING + 12,
         ),
       );
@@ -1851,7 +1845,7 @@ export class SubwayGame {
     for (const b of this.buildings) {
       b.mesh.position.z += move;
       if (b.mesh.position.z > DESPAWN_Z + 20) {
-        b.mesh.position.z -= 16 * 9;
+        b.mesh.position.z -= 10 * 24;
         b.mesh.position.y = b.h / 2;
       }
     }
