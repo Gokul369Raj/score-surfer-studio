@@ -75,13 +75,14 @@ const GOKUL_COLORS = {
   mouth: 0x9c3b34,
 };
 
-// Nischay Sir — white button-down, dark trousers, belt, messenger bag
+// Nischay Sir — light blue button-down so he reads differently from Gokul's
+// white tee on screen, dark trousers, belt, messenger bag
 const SIR_COLORS = {
   skin: 0xf0b58a,
   hair: 0x23262e,
   hairHi: 0x4a4f5a,
-  shirt: 0xf4f6f9,
-  shirtRoll: 0xdde3ea,
+  shirt: 0xd7e4f6,
+  shirtRoll: 0xe4edf7,
   tie: 0x1f3a5f,
   pants: 0x2f3542,
   belt: 0x5f4630,
@@ -102,13 +103,16 @@ const SIR_COLORS = {
 
 const TRAIN_COLORS = [0xe03131, 0x1971c2, 0x2f9e44, 0x9c36b5, 0xf08c00];
 const BUILDING_COLORS = [
-  0x4dabf7, 0xfab005, 0x69db7c, 0xda77f2, 0xffa94d, 0x74c0fc, 0xf783ac,
-  0xa9e34b,
+  0x74b9ff, 0xfdcb6e, 0x55efc4, 0xe170b6, 0xffb27d, 0x9fb4ff, 0xf78fb3,
+  0xa8e6a3,
 ];
 const BILLBOARD_SPACING = 17;
 const BILLBOARD_COUNT = 10;
 
-type ObstacleKind = "barrier" | "train" | "overhead";
+// Obstacles: trains (dodge by switching lanes) and overhead gates (slide
+// under). Wall-style barriers were removed — nothing on the track that Gokul
+// can just cross without a clear interaction.
+type ObstacleKind = "train" | "overhead";
 
 interface Obstacle {
   group: THREE.Group;
@@ -254,7 +258,6 @@ export class SubwayGame {
   private buildings: Building[] = [];
   private billboards: Billboard[] = [];
   private trees: THREE.Group[] = [];
-  private clouds: THREE.Group[] = [];
 
   // Sun (moves with player so shadows stay crisp)
   private sun!: THREE.DirectionalLight;
@@ -320,7 +323,7 @@ export class SubwayGame {
   private initScene(): void {
     this.scene = new THREE.Scene();
 
-    // Sky gradient background
+    // Clean sky gradient — no floating clutter
     const sky = document.createElement("canvas");
     sky.width = 2;
     sky.height = 256;
@@ -674,7 +677,7 @@ export class SubwayGame {
       lower.add(this.buildFormalShoe(shoe, shoeDark, sole));
     }
 
-    // White button-down with a navy tie
+    // Light blue button-down with a navy tie
     const chestLow = this.sph(0.28, shirt, 1, 0.82, 0.64);
     chestLow.position.set(0, -0.04, 0.01);
     rig.chest.add(chestLow);
@@ -848,11 +851,11 @@ export class SubwayGame {
     hair: THREE.Material,
     hi: THREE.Material,
   ): void {
-    // Smooth base cap — clean silhouette instead of a lumpy cloud
-    const cap = this.sph(0.33, hair, 1.05, 0.8, 1.03);
+    // Smooth base cap — flattened so it reads as a head of hair, not a ball
+    const cap = this.sph(0.33, hair, 1.05, 0.76, 1.03);
     cap.position.set(0, 0.09, 0);
     group.add(cap);
-    // Structured curls — layered rings + back mass
+    // Structured curls — layered rings + back mass + neck line
     const spots: Array<[number, number, number, number]> = [
       [0, 0.26, 0, 0.125], // crown
       [0, 0.22, -0.13, 0.105],
@@ -870,6 +873,10 @@ export class SubwayGame {
       [0.07, 0.12, 0.2, 0.115],
       [-0.07, 0.12, 0.2, 0.115],
       [0, 0.16, 0.13, 0.12],
+      // curls down the back of the neck — breaks the round silhouette
+      [0.1, 0.07, 0.21, 0.105],
+      [-0.1, 0.07, 0.21, 0.105],
+      [0, 0.06, 0.22, 0.11],
     ];
     for (const [x, y, z, r] of spots) {
       const c = this.sph(r, hair, 1.08, 0.82, 1.05);
@@ -1071,18 +1078,6 @@ export class SubwayGame {
         ),
       );
     }
-
-    // Clouds
-    for (let i = 0; i < 8; i++) {
-      const c = this.makeCloud();
-      c.position.set(
-        (Math.random() - 0.5) * 120,
-        26 + Math.random() * 14,
-        -30 - Math.random() * 120,
-      );
-      this.scene.add(c);
-      this.clouds.push(c);
-    }
   }
 
   // ── Textures / helpers ─────────────────────────────────────────────
@@ -1125,14 +1120,14 @@ export class SubwayGame {
     c.width = 128;
     c.height = 128;
     const g = c.getContext("2d")!;
-    g.fillStyle = "#a4906c";
+    g.fillStyle = "#8d7a58";
     g.fillRect(0, 0, 128, 128);
-    for (let i = 0; i < 950; i++) {
+    for (let i = 0; i < 1200; i++) {
       const x = Math.random() * 128;
       const y = Math.random() * 128;
-      const r = 1 + Math.random() * 1.7;
-      const v = 55 + Math.random() * 130;
-      g.fillStyle = `rgba(${v},${v * 0.9},${v * 0.6},0.6)`;
+      const r = 1 + Math.random() * 1.8;
+      const v = 40 + Math.random() * 160;
+      g.fillStyle = `rgba(${v},${v * 0.88},${v * 0.58},0.7)`;
       g.beginPath();
       g.arc(x, y, r, 0, Math.PI * 2);
       g.fill();
@@ -1262,9 +1257,9 @@ export class SubwayGame {
   }
 
   private makeBuilding(x: number, z: number): Building {
-    const w = 6 + Math.random() * 4;
-    const h = 7 + Math.random() * 10;
-    const d = 6 + Math.random() * 4;
+    const w = 5 + Math.random() * 3.5;
+    const h = 9 + Math.random() * 9;
+    const d = 5 + Math.random() * 3;
     const color = BUILDING_COLORS[
       Math.floor(Math.random() * BUILDING_COLORS.length)
     ];
@@ -1274,28 +1269,41 @@ export class SubwayGame {
     mesh.receiveShadow = true;
     this.scene.add(mesh);
 
-    // Roof slab
-    const roof = this.box(w + 0.7, 0.6, d + 0.7, this.mat(0x7a8894));
-    roof.position.y = h + 0.3;
+    // Dark base plinth — grounds the building visually
+    const base = this.box(w + 0.35, 0.9, d + 0.35, this.mat(0x5b6470));
+    base.position.y = 0.45;
+    base.receiveShadow = true;
+    mesh.add(base);
+
+    // Roof parapet slab + AC unit on top — reads as a real building
+    const roof = this.box(w + 0.7, 0.5, d + 0.7, this.mat(0x8a95a3));
+    roof.position.y = h + 0.25;
     roof.receiveShadow = true;
     mesh.add(roof);
+    const ac = this.box(0.95, 0.6, 0.7, this.mat(0x9aa5b0));
+    ac.position.set(w * 0.18, h + 0.8, 0);
+    mesh.add(ac);
 
-    // Window grid — some windows lit, some off
+    // Window grid on the track-facing faces (the ±x sides the camera sees),
+    // some windows warmly lit, some off — no more flat pastel boxes
     const windows: THREE.Mesh[] = [];
-    const cols = Math.floor(w / 1.3);
-    const rows = Math.floor(h / 1.6);
+    const cols = Math.floor(d / 1.35);
+    const rows = Math.floor(h / 1.7);
+    const face = x > 0 ? 1 : -1;
     for (let c = 0; c < cols; c++) {
       for (let r = 0; r < rows; r++) {
-        const lit = Math.random() < 0.22;
-        const winMat = this.mat(lit ? 0xffe9a8 : 0xdfe6ee);
+        const lit = Math.random() < 0.3;
         const win = new THREE.Mesh(
-          new THREE.BoxGeometry(0.55, 0.8, 0.06),
-          winMat,
+          new THREE.BoxGeometry(0.08, 0.75, 0.55),
+          new THREE.MeshLambertMaterial({
+            color: lit ? 0xffe9a8 : 0xc3ced9,
+            emissive: lit ? 0x8a6a00 : 0x000000,
+          }),
         );
         win.position.set(
-          -w / 2 + 1 + c * 1.3,
-          -h / 2 + 1.2 + r * 1.6,
-          Math.abs(x) / x * d / 2 + 0.04,
+          face * (w / 2 + 0.05),
+          -h / 2 + 1.3 + r * 1.7,
+          -d / 2 + 1 + c * 1.35,
         );
         mesh.add(win);
         windows.push(win);
@@ -1379,25 +1387,6 @@ export class SubwayGame {
       leaf.position.y = 2 + i * 0.9;
       leaf.castShadow = true;
       g.add(leaf);
-    }
-    return g;
-  }
-
-  private makeCloud(): THREE.Group {
-    const g = new THREE.Group();
-    const mat = new THREE.MeshLambertMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0.92,
-    });
-    for (let i = 0; i < 4; i++) {
-      const puff = new THREE.Mesh(
-        new THREE.SphereGeometry(1.6 + Math.random() * 1.2, 10, 8),
-        mat,
-      );
-      puff.position.set(i * 1.8 - 2.7, Math.random() * 0.8, (Math.random() - 0.5) * 1.4);
-      puff.scale.y = 0.6;
-      g.add(puff);
     }
     return g;
   }
@@ -1667,10 +1656,6 @@ export class SubwayGame {
     for (const c of this.coins) {
       c.mesh.rotation.y += dt * 2.5;
     }
-    for (const cl of this.clouds) {
-      cl.position.z += dt * 1.2;
-      if (cl.position.z > 40) cl.position.z -= 160;
-    }
     if (this.phase === "over") this.updateParticles(dt);
 
     if (this.phase === "ready") {
@@ -1859,10 +1844,6 @@ export class SubwayGame {
         b.group.position.z -= BILLBOARD_COUNT * BILLBOARD_SPACING;
       }
     }
-    for (const cl of this.clouds) {
-      cl.position.z += dt * 1.4;
-      if (cl.position.z > 40) cl.position.z -= 160;
-    }
 
     // Move obstacles + coins, check collisions
     this.moveEntities(dt);
@@ -2010,12 +1991,14 @@ export class SubwayGame {
     const gap = Math.max(16, 30 - (this.speed - BASE_SPEED) * 0.55);
     this.nextGap = gap + Math.random() * 7;
 
+    // No wall-style obstacles: trains (change lanes) and overhead gates
+    // (slide under) — every obstacle has a clear interaction.
     const roll = Math.random();
     let kind: ObstacleKind;
     if (this.lastSpawnWasTrain && roll < 0.5) {
-      kind = roll < 0.25 ? "barrier" : "overhead";
+      kind = "overhead";
     } else {
-      kind = roll < 0.4 ? "train" : roll < 0.72 ? "barrier" : "overhead";
+      kind = roll < 0.55 ? "train" : "overhead";
     }
 
     if (kind === "train") {
@@ -2027,20 +2010,6 @@ export class SubwayGame {
         this.spawnObstacle("train", other, -3.5);
       }
       this.lastSpawnWasTrain = true;
-    } else if (kind === "barrier") {
-      const free = Math.floor(Math.random() * 3);
-      const lanesToFill = Math.random() < 0.45 ? 2 : 1;
-      for (let l = 0; l < 3; l++) {
-        if (l !== free && (lanesToFill === 2 || l === free)) {
-          this.spawnObstacle("barrier", l);
-        }
-      }
-      // 1-lane case fills one random non-free lane
-      if (lanesToFill === 1) {
-        const pick = free === 0 ? 1 : free === 2 ? 1 : Math.random() < 0.5 ? 0 : 2;
-        this.spawnObstacle("barrier", pick);
-      }
-      this.lastSpawnWasTrain = false;
     } else {
       const free = Math.floor(Math.random() * 3);
       this.spawnObstacle("overhead", free);
@@ -2123,24 +2092,6 @@ export class SubwayGame {
           );
           group.add(wheel);
         }
-      }
-    } else if (kind === "barrier") {
-      const bar = this.box(w, 0.55, 0.35, this.mat(0xf59f00));
-      bar.position.y = 0.6;
-      group.add(bar);
-      // Stripes
-      const stripeMat = this.mat(0xffffff);
-      for (let i = 0; i < 3; i++) {
-        const st = this.box(0.3, 0.55, 0.37, stripeMat);
-        st.position.set(-0.45 + i * 0.45, 0.6, 0);
-        group.add(st);
-      }
-      // Legs
-      const legMat = this.mat(0x8a5a2b);
-      for (const lx of [-1, 1]) {
-        const leg = this.box(0.12, 0.62, 0.12, legMat);
-        leg.position.set(lx * (w / 2 - 0.08), 0.31, 0);
-        group.add(leg);
       }
     } else {
       // Overhead gate: two posts + beam to slide under
