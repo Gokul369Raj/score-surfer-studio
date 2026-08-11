@@ -1,1 +1,12 @@
-[FILE_TOO_LARGE]: The combined read_files output exceeded the 100,000 character hard limit. This file was truncated after 0 characters. Read it separately or use code_search for the relevant section.
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  // relative base so the built app works when hosted under a sub-path
+  // (e.g. GitHub Pages: /score-surfer-studio/)
+  base: "./",
+  plugins: [react()],
+  server: {
+    host: true,
+  },
+});

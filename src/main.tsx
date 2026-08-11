@@ -1,1 +1,10 @@
-[FILE_TOO_LARGE]: The combined read_files output exceeded the 100,000 character hard limit. This file was truncated after 0 characters. Read it separately or use code_search for the relevant section.
+import React from "react";
+import ReactDOM from "react-dom/client";
+import "./index.css";
+import { TitCampusRunGame } from "./components/TitCampusRunGame";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <TitCampusRunGame />
+  </React.StrictMode>,
+);
