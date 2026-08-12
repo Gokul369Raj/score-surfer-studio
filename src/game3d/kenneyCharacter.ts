@@ -167,17 +167,26 @@ function retargetClip(
     if (!n.myObj) continue;
     // The child's position lives IN THIS BONE'S LOCAL FRAME (it is a direct
     // child), so it is the local child axis directly.
-    const kChild = n.kBone.children.find((c) => (c as THREE.Bone).isBone) as THREE.Bone | undefined;
-    const kDir = kChild ? new THREE.Vector3().copy(kChild.position).normalize() : new THREE.Vector3(0, 1, 0);
+    // Multi-child joints (hips has LeftUpLeg/RightUpLeg/Spine, chest has the
+    // shoulders) expose side branches too — pick the child whose local
+    // direction best matches the scaffold's segment so the chain direction
+    // (hips→spine, chest→neck) is what gets aligned, never a limb.
+    const kChildren = n.kBone.children.filter((c) => (c as THREE.Bone).isBone) as THREE.Bone[];
     const myChild = n.myObj.children.find((c) => c !== undefined && c !== null) as THREE.Object3D | undefined;
-    let myAxis = new THREE.Vector3(0, 1, 0);
-    if (kChild && myChild) {
-      myAxis = new THREE.Vector3().copy(myChild.position).normalize();
-    } else {
+    if (!kChildren.length || !myChild) {
       // end bone (foot/hand): keep the source rig's orientation
       boneQ.set(n, new THREE.Quaternion());
       continue;
     }
+    const myAxis = new THREE.Vector3().copy(myChild.position).normalize();
+    let best = kChildren[0];
+    let bestDot = -2;
+    for (const c of kChildren) {
+      const d = new THREE.Vector3().copy(c.position).normalize();
+      const dot = d.dot(myAxis);
+      if (dot > bestDot) { bestDot = dot; best = c; }
+    }
+    const kDir = new THREE.Vector3().copy(best.position).normalize();
     boneQ.set(n, new THREE.Quaternion().setFromUnitVectors(kDir, myAxis));
   }
 
@@ -294,6 +303,13 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
   // model's real joint positions; the IK-authored clips play on it and the
   // retarget samples its world rotations (see kenneyClips.ts).
   const myRoot = kenneyPoseScaffold();
+  // The scaffold is authored in the old rig's convention (left limb at −X),
+  // but the Kenney FBX stores its "left" bones at +X (Hips' LeftUpLeg child
+  // sits at (0.2, 0.06, 0)). Reflecting the scaffold about the X axis maps
+  // its frame onto the Kenney skeleton's frame — without it every retargeted
+  // pose comes out left/right mirrored (left limbs pulled toward centre).
+  myRoot.scale.x = -1;
+  myRoot.updateMatrixWorld(true);
 
   // The Kenney rig has IK/FK control bones (HipsCtrl, LeftFootCtrl, …) above
   // the deform bones — the skeleton root is the top-most bone that is an
