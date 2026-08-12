@@ -1,18 +1,23 @@
 import * as THREE from "three";
 
 /**
- * Original anime-styled characters for TIT Campus Run — professional
- * mobile-game look built from shared primitives (no external models).
- *  - GOKUL RAJ  : young engineer, voluminous dark curly hair, hoodie + joggers
- *  - NISCHAY SIR: TNP Cell Head, formal shirt + glasses + hip bag
- * Rigged hips→chest→neck→head, full limbs with fingers; animated with a
- * procedural pose-blend system. Materials use MeshToonMaterial with a
- * stepped gradient map for clean anime cel-shading.
+ * TIT Campus Run — original anime-styled characters rebuilt for the skeletal
+ * animation system (see animations.ts).
+ *
+ *  - GOKUL RAJ  : young engineer, voluminous dark curly hair, red hoodie +
+ *                 slate joggers + chunky sneakers (TIT BHOPAL on his back)
+ *  - NISCHAY SIR: TNP Cell Head, formal shirt + tie + glasses + hip bag
+ *
+ * Each character is a named-bone hierarchy (hips → spine → chest → neck →
+ * head, plus two-segment arms/legs) driven by THREE.AnimationMixer clips.
+ * Everything is generated from shared low-poly primitives — no external
+ * model files, no texture downloads, mobile-friendly.
  */
 
 export interface CharacterRig {
   group: THREE.Group;
   hips: THREE.Group;
+  spine: THREE.Group;
   chest: THREE.Group;
   neck: THREE.Group;
   head: THREE.Group;
@@ -36,51 +41,6 @@ export interface CharacterRig {
   thumbsR: THREE.Mesh;
 }
 
-export type PoseKey =
-  | "hips" | "chest" | "neck" | "head"
-  | "upperArmL" | "upperArmR" | "forearmL" | "forearmR" | "handL" | "handR"
-  | "thighL" | "thighR" | "shinL" | "shinR" | "footL" | "footR";
-
-export type Pose = Record<PoseKey, { rx: number; ry: number; rz: number }>;
-
-const POSE_KEYS: PoseKey[] = [
-  "hips", "chest", "neck", "head",
-  "upperArmL", "upperArmR", "forearmL", "forearmR", "handL", "handR",
-  "thighL", "thighR", "shinL", "shinR", "footL", "footR",
-];
-
-export function makePose(): Pose {
-  return Object.fromEntries(POSE_KEYS.map((k) => [k, { rx: 0, ry: 0, rz: 0 }])) as Pose;
-}
-
-export function resetPose(p: Pose): void {
-  for (const k of POSE_KEYS) {
-    p[k].rx = 0;
-    p[k].ry = 0;
-    p[k].rz = 0;
-  }
-}
-
-export function applyPose(
-  rig: CharacterRig,
-  weights: { idle: number; run: number; jump: number; slide: number; caught: number },
-  poses: Record<"idle" | "run" | "jump" | "slide" | "caught", Pose>,
-) {
-  for (const k of POSE_KEYS) {
-    const b = rig[k];
-    const i = poses.idle[k];
-    const r = poses.run[k];
-    const j = poses.jump[k];
-    const s = poses.slide[k];
-    const c = poses.caught[k];
-    b.rotation.x = i.rx * weights.idle + r.rx * weights.run + j.rx * weights.jump + s.rx * weights.slide + c.rx * weights.caught;
-    b.rotation.y = i.ry * weights.idle + r.ry * weights.run + j.ry * weights.jump + s.ry * weights.slide + c.ry * weights.caught;
-    b.rotation.z = i.rz * weights.idle + r.rz * weights.run + j.rz * weights.jump + s.rz * weights.slide + c.rz * weights.caught;
-  }
-}
-
-// ------------------------------------------------------------------ helpers
-
 interface Builder {
   group: THREE.Group;
   mats: THREE.Material[];
@@ -88,8 +48,9 @@ interface Builder {
   castAll(): void;
 }
 
-function bone(parent: THREE.Object3D, x: number, y: number, z: number): THREE.Group {
+function bone(parent: THREE.Object3D, name: string, x: number, y: number, z: number): THREE.Group {
   const g = new THREE.Group();
+  g.name = name;
   g.position.set(x, y, z);
   parent.add(g);
   return g;
@@ -135,11 +96,16 @@ function toon(
 }
 
 /**
- * Text label texture with auto-fit typography and optional dark backing panel —
- * guaranteed to fit the target plane so names stay readable.
+ * Direct jersey print texture: bold auto-fit text with a strong contrasting
+ * outline and a soft drop shadow, so names stay crisp on any shirt color —
+ * no backing plate needed.
  */
-function labelTexture(text: string, fg: string, backing: string | null): THREE.CanvasTexture {
-  // multi-line support ("NAME\nSURNAME") — each line centered, big font
+function labelTexture(
+  text: string,
+  fg: string,
+  outline: string,
+  shadow: string | null,
+): THREE.CanvasTexture {
   const lines = text.split("\n");
   const W = 1024;
   const H = 560;
@@ -148,38 +114,35 @@ function labelTexture(text: string, fg: string, backing: string | null): THREE.C
   c.height = H;
   const ctx = c.getContext("2d")!;
   ctx.clearRect(0, 0, W, H);
-  if (backing) {
-    const pad = 26;
-    const r = 40;
-    ctx.fillStyle = backing;
-    ctx.beginPath();
-    ctx.roundRect(pad, pad, W - pad * 2, H - pad * 2, r);
-    ctx.fill();
-    ctx.strokeStyle = "rgba(255,255,255,0.28)";
-    ctx.lineWidth = 5;
-    ctx.stroke();
-  }
-  // auto-fit the font to the longest line
-  const font = (s: number) => `800 ${s}px "Space Grotesk", Arial, sans-serif`;
-  let size = 210;
+
+  // auto-fit the font as large as the plane allows
+  const font = (s: number) => `900 ${s}px "Space Grotesk", Arial, sans-serif`;
+  let size = 260;
   ctx.font = font(size);
   const measure = () => Math.max(...lines.map((l) => ctx.measureText(l).width));
   let longest = measure();
-  const maxW = backing ? W * 0.84 : W * 0.95;
-  while (longest > maxW && size > 60) {
-    size -= 8;
+  const maxW = W * 0.94;
+  while (longest > maxW && size > 70) {
+    size -= 6;
     ctx.font = font(size);
     longest = measure();
   }
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.lineJoin = "round";
-  ctx.lineWidth = Math.max(10, size * 0.13);
-  ctx.strokeStyle = "rgba(0,0,0,0.55)";
-  const lineH = size * 1.16;
+  ctx.lineCap = "round";
+  const lineH = size * 1.12;
   const startY = H / 2 - ((lines.length - 1) * lineH) / 2;
+  const lw = Math.max(18, size * 0.18);
+
   for (let i = 0; i < lines.length; i++) {
     const ly = startY + i * lineH;
+    if (shadow) {
+      ctx.fillStyle = shadow;
+      ctx.fillText(lines[i], W / 2 + 9, ly + 11);
+    }
+    ctx.lineWidth = lw;
+    ctx.strokeStyle = outline;
     ctx.strokeText(lines[i], W / 2, ly);
     ctx.fillStyle = fg;
     ctx.fillText(lines[i], W / 2, ly);
@@ -194,7 +157,6 @@ function labelTexture(text: string, fg: string, backing: string | null): THREE.C
 function addEyes(
   head: THREE.Group,
   b: Builder,
-  browMat: THREE.Material,
   sx: number,
   sy: number,
   sz: number,
@@ -205,15 +167,15 @@ function addEyes(
   const irisMat = toon(iris);
   const pupil = toon(0x14191f);
   const hl = toon(0xffffff);
-  const eyeGeo = new THREE.SphereGeometry(0.062, 20, 16);
-  const irisGeo = new THREE.SphereGeometry(0.044, 16, 14);
-  const pupilGeo = new THREE.SphereGeometry(0.021, 12, 10);
+  const eyeGeo = new THREE.SphereGeometry(0.064, 20, 16);
+  const irisGeo = new THREE.SphereGeometry(0.046, 16, 14);
+  const pupilGeo = new THREE.SphereGeometry(0.022, 12, 10);
   const hlGeo = new THREE.SphereGeometry(0.017, 10, 10);
   b.mats.push(white, irisMat, pupil, hl);
   b.geos.push(eyeGeo, irisGeo, pupilGeo, hlGeo);
 
-  const eyeL = bone(head, -sx, sy, sz);
-  const eyeR = bone(head, sx, sy, sz);
+  const eyeL = bone(head, "eyeL", -sx, sy, sz);
+  const eyeR = bone(head, "eyeR", sx, sy, sz);
   for (const eye of [eyeL, eyeR]) {
     const w = new THREE.Mesh(eyeGeo, white);
     const ir = new THREE.Mesh(irisGeo, irisMat);
@@ -226,19 +188,19 @@ function addEyes(
   }
 
   // eyebrows
-  const browGeo = new THREE.BoxGeometry(0.09, 0.022, 0.024);
+  const browGeo = new THREE.BoxGeometry(0.095, 0.022, 0.024);
   b.geos.push(browGeo);
   for (const [bx, sgn] of [[-sx, -1], [sx, 1]] as const) {
-    const m = new THREE.Mesh(browGeo, browMat);
+    const m = new THREE.Mesh(browGeo, skin);
     m.position.set(bx, sy + 0.075, sz + 0.04);
     m.rotation.z = -sgn * 0.14;
     head.add(m);
   }
   // mouth
-  const mouthGeo = new THREE.TorusGeometry(0.044, 0.009, 8, 16, Math.PI);
+  const mouthGeo = new THREE.TorusGeometry(0.046, 0.009, 8, 16, Math.PI);
   b.geos.push(mouthGeo);
   const mouth = new THREE.Mesh(mouthGeo, skin);
-  mouth.position.set(0, sy - 0.14, sz + 0.014);
+  mouth.position.set(0, sy - 0.145, sz + 0.014);
   mouth.rotation.z = Math.PI;
   head.add(mouth);
   return { eyeL, eyeR };
@@ -279,31 +241,29 @@ function addFingers(
   skin: THREE.Material,
   side: -1 | 1,
 ): { fingers: THREE.Mesh[]; thumb: THREE.Mesh } {
-  const fingerGeo = new THREE.CapsuleGeometry(0.017, 0.055, 4, 8);
-  const thumbGeo = new THREE.CapsuleGeometry(0.02, 0.045, 4, 8);
+  const fingerGeo = new THREE.CapsuleGeometry(0.016, 0.055, 4, 8);
+  const thumbGeo = new THREE.CapsuleGeometry(0.019, 0.045, 4, 8);
   b.geos.push(fingerGeo, thumbGeo);
   const fingers: THREE.Mesh[] = [];
   for (let i = 0; i < 4; i++) {
-    const pivot = bone(hand, (i - 1.5) * 0.021 * side, 0.005, 0.055);
+    const pivot = bone(hand, "", (i - 1.5) * 0.021 * side, -0.008, 0.062);
     const f = new THREE.Mesh(fingerGeo, skin);
-    f.position.set(0, 0.045, 0);
-    f.rotation.x = -0.3;
+    f.position.set(0, 0.05, 0);
+    f.rotation.x = -0.25;
     pivot.add(f);
     fingers.push(f);
   }
-  const tp = bone(hand, side * 0.05, 0.005, 0.005);
+  const tp = bone(hand, "", side * 0.052, -0.01, 0.01);
   const thumb = new THREE.Mesh(thumbGeo, skin);
-  thumb.position.set(side * 0.012, 0.012, 0.03);
+  thumb.position.set(side * 0.012, 0.014, 0.03);
   thumb.rotation.set(0, -side * 0.45, side * 0.55);
   tp.add(thumb);
   return { fingers, thumb };
 }
 
-/** Big readable name label on the character's back. */
 /**
- * Fabric-printed name label: no backing patch, text printed straight onto the
- * shirt and curved to hug the cylindrical body so it follows the surface
- * naturally (like a real jersey print).
+ * Direct jersey print on the character's back, curved to hug the cylindrical
+ * torso so it follows the surface naturally.
  */
 function addBackLabel(
   b: Builder,
@@ -313,10 +273,10 @@ function addBackLabel(
   z: number,
   w: number,
   h: number,
-  fg: string,
+  style: { fg: string; outline: string; shadow?: string | null },
   radius: number,
 ) {
-  const tex = labelTexture(text, fg, null);
+  const tex = labelTexture(text, style.fg, style.outline, style.shadow ?? null);
   const mat = new THREE.MeshBasicMaterial({
     map: tex,
     transparent: true,
@@ -326,8 +286,6 @@ function addBackLabel(
     polygonOffsetUnits: -2,
   });
   b.mats.push(mat);
-  // bend a wide-segmented plane around the body cylinder (edges bow toward
-  // the camera so the print wraps the shirt like real fabric)
   const segs = 24;
   const geo = new THREE.PlaneGeometry(w, h, segs, 1);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -345,6 +303,48 @@ function addBackLabel(
   parent.add(plane);
 }
 
+// ------------------------------------------------------------- shared rig
+
+/**
+ * Builds the named-bone skeleton every character shares. All bones get names
+ * that match the animation clips in animations.ts.
+ */
+function makeRig(b: Builder): {
+  hips: THREE.Group; spine: THREE.Group; chest: THREE.Group; neck: THREE.Group; head: THREE.Group;
+  upperArmL: THREE.Group; upperArmR: THREE.Group; forearmL: THREE.Group; forearmR: THREE.Group;
+  handL: THREE.Group; handR: THREE.Group;
+  thighL: THREE.Group; thighR: THREE.Group; shinL: THREE.Group; shinR: THREE.Group;
+  footL: THREE.Group; footR: THREE.Group;
+} {
+  const { group } = b;
+
+  // `body` is an intermediate group at the character's origin. Clips animate
+  // body.position (bob / slide drop) WITHOUT clobbering the hips bone's base
+  // height offset, so the character always stays planted on the road.
+  const body = bone(group, "body", 0, 0, 0);
+  const hips = bone(body, "hips", 0, 0.95, 0);
+  const spine = bone(hips, "spine", 0, 0.14, 0);
+  const chest = bone(spine, "chest", 0, 0.19, 0);
+  const neck = bone(chest, "neck", 0, 0.21, 0);
+  const head = bone(neck, "head", 0, 0.1, 0);
+
+  const upperArmL = bone(chest, "upperArmL", -0.26, 0.14, 0);
+  const forearmL = bone(upperArmL, "forearmL", 0, -0.24, 0);
+  const handL = bone(forearmL, "handL", 0, -0.22, 0);
+  const upperArmR = bone(chest, "upperArmR", 0.26, 0.14, 0);
+  const forearmR = bone(upperArmR, "forearmR", 0, -0.24, 0);
+  const handR = bone(forearmR, "handR", 0, -0.22, 0);
+
+  const thighL = bone(hips, "thighL", -0.115, -0.08, 0);
+  const shinL = bone(thighL, "shinL", 0, -0.3, 0);
+  const footL = bone(shinL, "footL", 0, -0.28, 0);
+  const thighR = bone(hips, "thighR", 0.115, -0.08, 0);
+  const shinR = bone(thighR, "shinR", 0, -0.3, 0);
+  const footR = bone(shinR, "footR", 0, -0.28, 0);
+
+  return { hips, spine, chest, neck, head, upperArmL, upperArmR, forearmL, forearmR, handL, handR, thighL, thighR, shinL, shinR, footL, footR };
+}
+
 // --------------------------------------------------------------- GOKUL
 
 export function buildGokul(): CharacterRig & { hair: THREE.Mesh[] } {
@@ -359,75 +359,89 @@ export function buildGokul(): CharacterRig & { hair: THREE.Mesh[] } {
     },
   };
   const { group } = b;
+  const r = makeRig(b);
 
-  const skin = toon(0xcf8f68);
-  const hoodie = toon(0xd94436); // red t-shirt
-  const hoodieDark = toon(0x9c2b22); // darker red hem/cuffs/hood
-  const pants = toon(0xc8a24a); // mud-yellow (earth ochre) joggers
-  const shoe = toon(0xf4f6f5);
-  const sole = toon(0x0b1f2a);
+  const skin = toon(0xd69a72);
+  const hoodie = toon(0xe23b2e); // vivid red hoodie
+  const hoodieDark = toon(0x8f1f18); // darker red hems/hood
+  const pants = toon(0x2e3d4f); // slate blue joggers
+  const pantsDark = toon(0x22303f);
+  const shoe = toon(0xf2f4f5); // white sneakers
+  const sole = toon(0x16202a);
   const accent = toon(0xffb02e);
-  const glow = toon(0x1c2733, { emissive: 0x9dffd8, emissiveIntensity: 1.4 });
-  const hairMat = toon(0x2b1a12);
-  const hairHi = toon(0x5a3a22);
+  const glow = toon(0x1c2733, { emissive: 0x35f0c8, emissiveIntensity: 1.5 });
+  const hairMat = toon(0x33201a);
+  const hairHi = toon(0x5c3b28);
   const pouchMat = toon(0x26353f);
-  b.mats.push(skin, hoodie, hoodieDark, pants, shoe, sole, accent, glow, hairMat, hairHi, pouchMat);
+  b.mats.push(skin, hoodie, hoodieDark, pants, pantsDark, shoe, sole, accent, glow, hairMat, hairHi, pouchMat);
 
   // ---- torso ------------------------------------------------------------
-  const hips = bone(group, 0, 0.98, 0);
-  const chest = bone(hips, 0, 0.3, 0);
-  const neck = bone(chest, 0, 0.27, 0);
-  const head = bone(neck, 0, 0.11, 0);
-
-  const hipsGeo = new THREE.BoxGeometry(0.4, 0.27, 0.28);
+  const hipsGeo = new THREE.CapsuleGeometry(0.19, 0.14, 6, 12);
   b.geos.push(hipsGeo);
   const hipsMesh = new THREE.Mesh(hipsGeo, pants);
-  hipsMesh.position.set(0, -0.05, 0);
-  hips.add(hipsMesh);
+  hipsMesh.position.set(0, -0.06, 0);
+  hipsMesh.scale.set(1.12, 0.85, 0.92);
+  r.hips.add(hipsMesh);
 
-  // hoodie body with hem
-  const chestGeo = new THREE.CapsuleGeometry(0.27, 0.3, 8, 16);
-  b.geos.push(chestGeo);
-  const chestMesh = new THREE.Mesh(chestGeo, hoodie);
-  chestMesh.position.set(0, 0.03, 0);
-  chest.add(chestMesh);
+  // waistband
+  const waistGeo = new THREE.TorusGeometry(0.155, 0.035, 8, 16);
+  b.geos.push(waistGeo);
+  const waist = new THREE.Mesh(waistGeo, pantsDark);
+  waist.position.set(0, -0.13, 0);
+  waist.rotation.x = Math.PI / 2;
+  r.hips.add(waist);
 
-  const hemGeo = new THREE.TorusGeometry(0.2, 0.045, 8, 18);
+  // tapered torso (shoulders out, waist in)
+  const torsoGeo = new THREE.CylinderGeometry(0.185, 0.15, 0.46, 14);
+  b.geos.push(torsoGeo);
+  const torso = new THREE.Mesh(torsoGeo, hoodie);
+  torso.position.set(0, 0.01, 0);
+  r.chest.add(torso);
+
+  // chest volume (pecs) + hem
+  const chestPadGeo = new THREE.SphereGeometry(0.15, 12, 10);
+  b.geos.push(chestPadGeo);
+  const chestPad = new THREE.Mesh(chestPadGeo, hoodie);
+  chestPad.position.set(0, 0.06, 0.03);
+  chestPad.scale.set(1.3, 1.0, 0.75);
+  r.chest.add(chestPad);
+
+  const hemGeo = new THREE.TorusGeometry(0.15, 0.05, 8, 18);
   b.geos.push(hemGeo);
   const hem = new THREE.Mesh(hemGeo, hoodieDark);
   hem.position.set(0, -0.21, 0);
   hem.rotation.x = Math.PI / 2;
-  chest.add(hem);
+  r.chest.add(hem);
 
-  // zipper stripe + chest pocket
-  const stripeGeo = new THREE.BoxGeometry(0.045, 0.5, 0.025);
+  // zipper stripe + kangaroo pocket
+  const stripeGeo = new THREE.BoxGeometry(0.045, 0.42, 0.025);
   b.geos.push(stripeGeo);
   const stripe = new THREE.Mesh(stripeGeo, glow);
-  stripe.position.set(0, 0.03, 0.27);
-  stripe.rotation.x = 0.08;
-  chest.add(stripe);
+  stripe.position.set(0, 0.02, 0.185);
+  stripe.rotation.x = 0.06;
+  r.chest.add(stripe);
 
-  const pocketGeo = new THREE.BoxGeometry(0.16, 0.12, 0.02);
+  const pocketGeo = new THREE.BoxGeometry(0.18, 0.13, 0.03);
   b.geos.push(pocketGeo);
   const pocket = new THREE.Mesh(pocketGeo, hoodieDark);
-  pocket.position.set(-0.13, -0.04, 0.265);
-  pocket.rotation.x = 0.08;
-  chest.add(pocket);
+  pocket.position.set(-0.06, -0.09, 0.17);
+  pocket.rotation.x = 0.06;
+  r.chest.add(pocket);
 
   // hood + drawstrings
-  const hoodGeo = new THREE.TorusGeometry(0.17, 0.05, 10, 20, Math.PI);
+  const hoodGeo = new THREE.TorusGeometry(0.155, 0.05, 10, 20, Math.PI);
   b.geos.push(hoodGeo);
   const hoodM = new THREE.Mesh(hoodGeo, hoodieDark);
-  hoodM.position.set(0, 0.27, -0.07);
+  hoodM.position.set(0, 0.2, -0.06);
   hoodM.rotation.x = Math.PI * 0.82;
-  chest.add(hoodM);
+  r.chest.add(hoodM);
   const drawGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.17, 6);
   b.geos.push(drawGeo);
   for (const s of [-1, 1]) {
     const d = new THREE.Mesh(drawGeo, glow);
-    d.position.set(s * 0.05, -0.09, 0.3);
-    d.rotation.x = s * -0.18;
-    chest.add(d);
+    d.position.set(s * 0.05, -0.12, 0.21);
+    d.rotation.x = s * -0.16;
+    r.chest.add(d);
   }
 
   // hip pouch on the left hip (keeps the back clear for the name)
@@ -436,38 +450,47 @@ export function buildGokul(): CharacterRig & { hair: THREE.Mesh[] } {
   const pouch = new THREE.Mesh(pouchGeo, pouchMat);
   pouch.position.set(-0.25, 0.05, -0.06);
   pouch.rotation.z = 0.12;
-  hips.add(pouch);
+  r.hips.add(pouch);
 
   // ---- neck + head (bigger anime head) ----------------------------------
-  const neckGeo = new THREE.CylinderGeometry(0.06, 0.075, 0.13, 10);
+  const neckGeo = new THREE.CylinderGeometry(0.055, 0.07, 0.12, 10);
   b.geos.push(neckGeo);
   const neckM = new THREE.Mesh(neckGeo, skin);
   neckM.position.set(0, 0.02, 0);
-  neck.add(neckM);
+  r.neck.add(neckM);
 
   const headGeo = new THREE.SphereGeometry(0.19, 26, 22);
   b.geos.push(headGeo);
   const headM = new THREE.Mesh(headGeo, skin);
   headM.position.set(0, 0.02, 0);
-  head.add(headM);
+  headM.scale.set(1.04, 1.06, 1.0);
+  r.head.add(headM);
+
+  // jaw hint
+  const jawGeo = new THREE.SphereGeometry(0.155, 16, 12);
+  b.geos.push(jawGeo);
+  const jaw = new THREE.Mesh(jawGeo, skin);
+  jaw.position.set(0, -0.06, 0.06);
+  jaw.scale.set(1.12, 0.75, 0.95);
+  r.head.add(jaw);
 
   const noseGeo = new THREE.SphereGeometry(0.028, 10, 8);
   b.geos.push(noseGeo);
   const nose = new THREE.Mesh(noseGeo, skin);
   nose.position.set(0, 0.0, 0.176);
   nose.scale.set(0.82, 0.92, 1);
-  head.add(nose);
+  r.head.add(nose);
 
-  addEars(head, b, skin, 0.19);
-  const { eyeL, eyeR } = addEyes(head, b, skin, 0.075, 0.035, 0.152, skin, 0xb06a2c);
-  addBlush(head, b, 0.075, 0.035, 0.152);
+  addEars(r.head, b, skin, 0.19);
+  const eyes = addEyes(r.head, b, 0.075, 0.03, 0.15, skin, 0xb06a2c);
+  addBlush(r.head, b, 0.075, 0.03, 0.15);
 
   // ---- anime curly hair: solid cap + defined curl clumps -----------------
   const capGeo = new THREE.SphereGeometry(0.2, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62);
   b.geos.push(capGeo);
   const cap = new THREE.Mesh(capGeo, hairMat);
   cap.position.set(0, 0.1, -0.012);
-  head.add(cap);
+  r.head.add(cap);
 
   const curlGeo = new THREE.SphereGeometry(0.07, 12, 10);
   b.geos.push(curlGeo);
@@ -477,24 +500,23 @@ export function buildGokul(): CharacterRig & { hair: THREE.Mesh[] } {
     m.position.set(x, y, z);
     m.userData.baseY = y; // stable base for the idle bounce (no drift)
     m.scale.set(sc, sc * 0.9, sc);
-    head.add(m);
+    r.head.add(m);
     hairMeshes.push(m);
   };
-  const ring = (y: number, r: number, count: number, sc: number) => {
+  const ring = (y: number, rr: number, count: number, sc: number) => {
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2 + y * 4;
-      curl(Math.cos(a) * r, y + 0.13, Math.sin(a) * r, sc * (0.92 + (i % 3) * 0.05), i % 4 === 0);
+      curl(Math.cos(a) * rr, y + 0.13, Math.sin(a) * rr, sc * (0.92 + (i % 3) * 0.05), i % 4 === 0);
     }
   };
   ring(0.15, 0.135, 9, 1.05); // base
   ring(0.19, 0.115, 8, 0.98); // mid
   ring(0.225, 0.088, 7, 0.92); // top
-  // crown
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
     curl(Math.cos(a) * 0.05, 0.27, Math.sin(a) * 0.05, 0.88, i % 2 === 0);
   }
-  // forehead fringe
+  // forehead fringe (swept)
   for (let i = 0; i < 5; i++) {
     curl(-0.15 + i * 0.075, 0.19 + (i % 2) * 0.025, 0.115 + Math.abs(i - 2) * 0.014, 0.95, i === 2);
   }
@@ -505,102 +527,107 @@ export function buildGokul(): CharacterRig & { hair: THREE.Mesh[] } {
   // nape volume
   for (let i = 0; i < 3; i++) curl((i - 1) * 0.07, 0.13, -0.175, 0.85);
 
-  // ---- arms -------------------------------------------------------------
-  const upperArmL = bone(chest, -0.3, 0.17, 0);
-  const forearmL = bone(upperArmL, 0, -0.25, 0);
-  const handL = bone(forearmL, 0, -0.23, 0);
-  const upperArmR = bone(chest, 0.3, 0.17, 0);
-  const forearmR = bone(upperArmR, 0, -0.25, 0);
-  const handR = bone(forearmR, 0, -0.23, 0);
-
-  const sleeveGeo = new THREE.CapsuleGeometry(0.077, 0.2, 6, 10);
+  // ---- arms (shoulder pad + sleeve hugging the torso) -------------------
+  const shoulderGeo = new THREE.SphereGeometry(0.08, 10, 8);
+  const sleeveGeo = new THREE.CapsuleGeometry(0.08, 0.2, 6, 10);
   const forearmGeo = new THREE.CapsuleGeometry(0.062, 0.18, 6, 10);
-  b.geos.push(sleeveGeo, forearmGeo);
-  for (const [u, f] of [[upperArmL, forearmL], [upperArmR, forearmR]] as const) {
+  const cuffGeo = new THREE.CylinderGeometry(0.065, 0.065, 0.05, 10);
+  b.geos.push(shoulderGeo, sleeveGeo, forearmGeo, cuffGeo);
+  for (const [u, f] of [[r.upperArmL, r.forearmL], [r.upperArmR, r.forearmR]] as const) {
+    const sh = new THREE.Mesh(shoulderGeo, hoodie);
+    sh.position.set(0, 0.04, 0);
+    u.add(sh);
     const s = new THREE.Mesh(sleeveGeo, hoodie);
     s.position.set(0, -0.1, 0);
     u.add(s);
     const fa = new THREE.Mesh(forearmGeo, skin);
     fa.position.set(0, -0.09, 0);
     f.add(fa);
-    // sleeve cuff
-    const cuff = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.062, 0.05, 10), hoodieDark);
+    const cuff = new THREE.Mesh(cuffGeo, hoodieDark);
     cuff.position.set(0, -0.17, 0);
     u.add(cuff);
-    b.geos.push(cuff.geometry);
   }
 
   // wristband (left)
-  const bandGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.035, 10);
+  const bandGeo = new THREE.CylinderGeometry(0.068, 0.068, 0.035, 10);
   b.geos.push(bandGeo);
   const band = new THREE.Mesh(bandGeo, accent);
   band.position.set(0, -0.035, 0);
-  handL.add(band);
+  r.handL.add(band);
 
-  const handGeo = new THREE.BoxGeometry(0.082, 0.07, 0.105);
+  // rounded palm + fingers
+  const handGeo = new THREE.SphereGeometry(0.055, 12, 10);
   b.geos.push(handGeo);
-  for (const h of [handL, handR]) {
+  for (const h of [r.handL, r.handR]) {
     const hm = new THREE.Mesh(handGeo, skin);
     hm.position.set(0, -0.03, 0.005);
+    hm.scale.set(1, 0.92, 1.25);
     h.add(hm);
   }
-  const fL = addFingers(handL, b, skin, -1);
-  const fR = addFingers(handR, b, skin, 1);
+  const fL = addFingers(r.handL, b, skin, -1);
+  const fR = addFingers(r.handR, b, skin, 1);
 
   // ---- legs -------------------------------------------------------------
-  const thighL = bone(hips, -0.115, -0.12, 0);
-  const shinL = bone(thighL, 0, -0.32, 0);
-  const footL = bone(shinL, 0, -0.3, 0);
-  const thighR = bone(hips, 0.115, -0.12, 0);
-  const shinR = bone(thighR, 0, -0.32, 0);
-  const footR = bone(shinR, 0, -0.3, 0);
-
-  const legGeo = new THREE.CapsuleGeometry(0.09, 0.24, 6, 10);
-  b.geos.push(legGeo);
-  for (const [t, s] of [[thighL, shinL], [thighR, shinR]] as const) {
+  const legGeo = new THREE.CapsuleGeometry(0.085, 0.24, 6, 10);
+  const shinGeo = new THREE.CapsuleGeometry(0.085, 0.27, 6, 10);
+  const ankleCuffGeo = new THREE.CylinderGeometry(0.088, 0.088, 0.05, 10);
+  b.geos.push(legGeo, shinGeo, ankleCuffGeo);
+  for (const [t, s] of [[r.thighL, r.shinL], [r.thighR, r.shinR]] as const) {
     const tm = new THREE.Mesh(legGeo, pants);
     tm.position.set(0, -0.15, 0);
     t.add(tm);
-    const sm = new THREE.Mesh(legGeo, pants);
-    sm.position.set(0, -0.15, 0);
+    const sm = new THREE.Mesh(shinGeo, pants);
+    sm.position.set(0, -0.17, 0);
     s.add(sm);
   }
-
-  // chunkier sneakers
-  const sneakerGeo = new THREE.BoxGeometry(0.115, 0.095, 0.27);
-  const soleGeo = new THREE.BoxGeometry(0.13, 0.05, 0.29);
-  const toeGeo = new THREE.BoxGeometry(0.105, 0.08, 0.08);
-  const stripe2Geo = new THREE.BoxGeometry(0.12, 0.02, 0.21);
-  const laceGeo = new THREE.BoxGeometry(0.12, 0.025, 0.05);
-  b.geos.push(sneakerGeo, soleGeo, toeGeo, stripe2Geo, laceGeo);
-  for (const foot of [footL, footR]) {
-    const sn = new THREE.Mesh(sneakerGeo, shoe);
-    sn.position.set(0, -0.05, 0.02);
-    foot.add(sn);
-    const so = new THREE.Mesh(soleGeo, sole);
-    so.position.set(0, -0.115, 0.02);
-    foot.add(so);
-    const to = new THREE.Mesh(toeGeo, shoe);
-    to.position.set(0, -0.06, 0.17);
-    foot.add(to);
-    const st = new THREE.Mesh(stripe2Geo, glow);
-    st.position.set(0, -0.075, 0.02);
-    foot.add(st);
-    const lc = new THREE.Mesh(laceGeo, shoe);
-    lc.position.set(0, -0.015, 0.09);
-    foot.add(lc);
+  // ankle cuffs at the shoe line
+  for (const s of [r.shinL, r.shinR]) {
+    const cuff = new THREE.Mesh(ankleCuffGeo, pantsDark);
+    cuff.position.set(0, -0.25, 0);
+    s.add(cuff);
   }
 
-  // ---- TIT BHOPAL printed on the red shirt back (no backing) -------------
-  addBackLabel(b, chest, "TIT BHOPAL", 0.13, -0.29, 0.6, 0.3, "#ffffff", 0.3);
+  // chunky sneakers, grounded on the road (sole bottom touches y = 0)
+  const shoeCollarGeo = new THREE.CylinderGeometry(0.07, 0.075, 0.09, 12);
+  const sneakerGeo = new THREE.BoxGeometry(0.115, 0.13, 0.27);
+  const soleGeo = new THREE.BoxGeometry(0.13, 0.12, 0.29);
+  const toeGeo = new THREE.BoxGeometry(0.105, 0.09, 0.08);
+  const stripe2Geo = new THREE.BoxGeometry(0.12, 0.022, 0.21);
+  const laceGeo = new THREE.BoxGeometry(0.12, 0.028, 0.05);
+  const heelGeo = new THREE.BoxGeometry(0.09, 0.1, 0.03);
+  b.geos.push(shoeCollarGeo, sneakerGeo, soleGeo, toeGeo, stripe2Geo, laceGeo, heelGeo);
+  for (const foot of [r.footL, r.footR]) {
+    const collar = new THREE.Mesh(shoeCollarGeo, shoe);
+    collar.position.set(0, -0.02, 0.02);
+    foot.add(collar);
+    const sn = new THREE.Mesh(sneakerGeo, shoe);
+    sn.position.set(0, -0.08, 0.02);
+    foot.add(sn);
+    const so = new THREE.Mesh(soleGeo, sole);
+    so.position.set(0, -0.2, 0.02);
+    foot.add(so);
+    const to = new THREE.Mesh(toeGeo, shoe);
+    to.position.set(0, -0.1, 0.17);
+    foot.add(to);
+    const st = new THREE.Mesh(stripe2Geo, glow);
+    st.position.set(0, -0.12, 0.02);
+    foot.add(st);
+    const lc = new THREE.Mesh(laceGeo, shoe);
+    lc.position.set(0, -0.02, 0.09);
+    foot.add(lc);
+    const heel = new THREE.Mesh(heelGeo, accent);
+    heel.position.set(0, -0.07, -0.13);
+    foot.add(heel);
+  }
+
+  // ---- TIT BHOPAL printed directly on the red shirt back ----------------
+  addBackLabel(b, r.chest, "TIT BHOPAL", 0.11, -0.185, 0.52, 0.3, { fg: "#ffffff", outline: "#4a0d07", shadow: "rgba(50,8,4,0.6)" }, 0.34);
 
   b.castAll();
 
   const rig: CharacterRig = {
-    group, hips, chest, neck, head,
-    upperArmL, upperArmR, forearmL, forearmR, handL, handR,
-    thighL, thighR, shinL, shinR, footL, footR,
-    eyeL, eyeR,
+    group, ...r,
+    eyeL: eyes.eyeL, eyeR: eyes.eyeR,
     fingersL: fL.fingers, fingersR: fR.fingers,
     thumbsL: fL.thumb, thumbsR: fR.thumb,
   };
@@ -621,54 +648,71 @@ export function buildNischay(): CharacterRig {
     },
   };
   const { group } = b;
+  const r = makeRig(b);
 
-  const skin = toon(0xa86b47);
-  const shirt = toon(0xb9cdd9);
-  const jacket = toon(0x1d3a52);
-  const trousers = toon(0x22292f);
-  const shoe = toon(0x1d2228);
+  const skin = toon(0xb47a52);
+  const shirt = toon(0xc9d8e2);
   const tie = toon(0xc23b3b);
+  const trousers = toon(0x232b33);
+  const shoe = toon(0x1d2228);
   const frameMat = toon(0x14181c);
   const lensMat = toon(0x9fb6c4, { transparent: true, opacity: 0.45 });
   const hairMat = toon(0x2b1e16);
   const bagMat = toon(0x6b3f26);
   const watchMat = toon(0x2f363d);
-  b.mats.push(skin, shirt, jacket, trousers, shoe, tie, frameMat, lensMat, hairMat, bagMat, watchMat);
+  const beltMat = toon(0x1a1f24);
+  b.mats.push(skin, shirt, tie, trousers, shoe, frameMat, lensMat, hairMat, bagMat, watchMat, beltMat);
 
-  const hips = bone(group, 0, 0.98, 0);
-  const chest = bone(hips, 0, 0.3, 0);
-  const neck = bone(chest, 0, 0.27, 0);
-  const head = bone(neck, 0, 0.11, 0);
-
-  const hipsGeo = new THREE.BoxGeometry(0.4, 0.27, 0.27);
+  // ---- torso ------------------------------------------------------------
+  const hipsGeo = new THREE.CapsuleGeometry(0.185, 0.14, 6, 12);
   b.geos.push(hipsGeo);
   const hipsMesh = new THREE.Mesh(hipsGeo, trousers);
-  hipsMesh.position.set(0, -0.05, 0);
-  hips.add(hipsMesh);
+  hipsMesh.position.set(0, -0.06, 0);
+  hipsMesh.scale.set(1.1, 0.85, 0.9);
+  r.hips.add(hipsMesh);
 
-  // formal shirt + tie + collar
-  const chestGeo = new THREE.CapsuleGeometry(0.27, 0.3, 8, 16);
-  b.geos.push(chestGeo);
-  const chestMesh = new THREE.Mesh(chestGeo, shirt);
-  chestMesh.position.set(0, 0.03, 0);
-  chest.add(chestMesh);
+  const beltGeo = new THREE.TorusGeometry(0.15, 0.032, 8, 16);
+  b.geos.push(beltGeo);
+  const belt = new THREE.Mesh(beltGeo, beltMat);
+  belt.position.set(0, -0.13, 0);
+  belt.rotation.x = Math.PI / 2;
+  r.hips.add(belt);
 
+  const torsoGeo = new THREE.CylinderGeometry(0.18, 0.145, 0.46, 14);
+  b.geos.push(torsoGeo);
+  const torso = new THREE.Mesh(torsoGeo, shirt);
+  torso.position.set(0, 0.01, 0);
+  r.chest.add(torso);
+
+  const chestPadGeo = new THREE.SphereGeometry(0.145, 12, 10);
+  b.geos.push(chestPadGeo);
+  const chestPad = new THREE.Mesh(chestPadGeo, shirt);
+  chestPad.position.set(0, 0.05, 0.03);
+  chestPad.scale.set(1.28, 1.0, 0.75);
+  r.chest.add(chestPad);
+
+  const hemGeo = new THREE.TorusGeometry(0.145, 0.045, 8, 18);
+  b.geos.push(hemGeo);
+  const hem = new THREE.Mesh(hemGeo, shirt);
+  hem.position.set(0, -0.21, 0);
+  hem.rotation.x = Math.PI / 2;
+  r.chest.add(hem);
+
+  // collar + tie
   const collarGeo = new THREE.BoxGeometry(0.24, 0.06, 0.06);
   b.geos.push(collarGeo);
   for (const s of [-1, 1]) {
     const col = new THREE.Mesh(collarGeo, shirt);
-    col.position.set(s * 0.07, 0.29, 0.17);
+    col.position.set(s * 0.07, 0.27, 0.15);
     col.rotation.z = s * 0.5;
-    chest.add(col);
+    r.chest.add(col);
   }
-  const tieGeo = new THREE.BoxGeometry(0.05, 0.22, 0.02);
+  const tieGeo = new THREE.BoxGeometry(0.05, 0.24, 0.02);
   b.geos.push(tieGeo);
   const tieM = new THREE.Mesh(tieGeo, tie);
-  tieM.position.set(0, 0.16, 0.27);
-  tieM.rotation.x = 0.12;
-  chest.add(tieM);
-
-
+  tieM.position.set(0, 0.15, 0.175);
+  tieM.rotation.x = 0.1;
+  r.chest.add(tieM);
 
   // hip shoulder-bag (kept off the back so the label stays readable)
   const bagGeo = new THREE.BoxGeometry(0.26, 0.22, 0.1);
@@ -676,35 +720,43 @@ export function buildNischay(): CharacterRig {
   const bag = new THREE.Mesh(bagGeo, bagMat);
   bag.position.set(0.27, -0.03, -0.04);
   bag.rotation.z = -0.14;
-  hips.add(bag);
+  r.hips.add(bag);
   const strapGeo = new THREE.BoxGeometry(0.05, 0.34, 0.03);
   b.geos.push(strapGeo);
   const strap = new THREE.Mesh(strapGeo, bagMat);
   strap.position.set(0.26, 0.18, -0.02);
   strap.rotation.z = -0.4;
-  chest.add(strap);
+  r.chest.add(strap);
 
-  // neck + head (bigger anime head)
-  const neckGeo = new THREE.CylinderGeometry(0.06, 0.075, 0.13, 10);
+  // ---- neck + head ------------------------------------------------------
+  const neckGeo = new THREE.CylinderGeometry(0.05, 0.065, 0.12, 10);
   b.geos.push(neckGeo);
   const neckM = new THREE.Mesh(neckGeo, skin);
   neckM.position.set(0, 0.02, 0);
-  neck.add(neckM);
+  r.neck.add(neckM);
 
   const headGeo = new THREE.SphereGeometry(0.18, 26, 22);
   b.geos.push(headGeo);
   const headM = new THREE.Mesh(headGeo, skin);
   headM.position.set(0, 0.02, 0);
-  head.add(headM);
+  headM.scale.set(1.02, 1.05, 1.0);
+  r.head.add(headM);
+
+  const jawGeo = new THREE.SphereGeometry(0.148, 16, 12);
+  b.geos.push(jawGeo);
+  const jaw = new THREE.Mesh(jawGeo, skin);
+  jaw.position.set(0, -0.055, 0.055);
+  jaw.scale.set(1.12, 0.75, 0.95);
+  r.head.add(jaw);
 
   const noseGeo = new THREE.SphereGeometry(0.027, 10, 8);
   b.geos.push(noseGeo);
   const nose = new THREE.Mesh(noseGeo, skin);
   nose.position.set(0, 0.0, 0.166);
   nose.scale.set(0.8, 0.95, 1);
-  head.add(nose);
+  r.head.add(nose);
 
-  addEars(head, b, skin, 0.18);
+  addEars(r.head, b, skin, 0.18);
 
   // neat anime side-part hair with a few combed spikes
   const hairCapGeo = new THREE.SphereGeometry(0.185, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.6);
@@ -712,20 +764,20 @@ export function buildNischay(): CharacterRig {
   const hairCap = new THREE.Mesh(hairCapGeo, hairMat);
   hairCap.position.set(0, 0.105, -0.008);
   hairCap.rotation.z = -0.12;
-  head.add(hairCap);
+  r.head.add(hairCap);
   const sideGeo = new THREE.BoxGeometry(0.18, 0.05, 0.1);
   b.geos.push(sideGeo);
   const sideHair = new THREE.Mesh(sideGeo, hairMat);
   sideHair.position.set(-0.1, 0.1, 0.0);
   sideHair.rotation.z = 0.35;
-  head.add(sideHair);
+  r.head.add(sideHair);
   const spikeGeo = new THREE.ConeGeometry(0.032, 0.13, 6);
   b.geos.push(spikeGeo);
   for (const [sx, sz, rz] of [[-0.055, 0.01, -0.15], [0.03, -0.05, 0.08], [0.07, 0.0, 0.22]] as const) {
     const sp = new THREE.Mesh(spikeGeo, hairMat);
     sp.position.set(sx, 0.205, sz);
     sp.rotation.z = rz;
-    head.add(sp);
+    r.head.add(sp);
   }
 
   // glasses
@@ -735,37 +787,34 @@ export function buildNischay(): CharacterRig {
   for (const s of [-1, 1]) {
     const fr = new THREE.Mesh(frameGeo, frameMat);
     fr.position.set(s * 0.09, 0.05, 0.15);
-    head.add(fr);
+    r.head.add(fr);
     const le = new THREE.Mesh(lensGeo, lensMat);
     le.position.set(s * 0.09, 0.05, 0.152);
-    head.add(le);
+    r.head.add(le);
   }
   const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.052, 0.015, 0.015), frameMat);
   bridge.position.set(0, 0.05, 0.153);
-  head.add(bridge);
+  r.head.add(bridge);
   b.geos.push(bridge.geometry);
 
-  const { eyeL, eyeR } = addEyes(head, b, hairMat, 0.072, 0.05, 0.115, skin, 0x3a2a1c);
+  const eyes = addEyes(r.head, b, 0.072, 0.05, 0.115, skin, 0x3a2a1c);
   // stern teacher brows
   for (const [bx, sgn] of [[-0.072, -1], [0.072, 1]] as const) {
     const brow = new THREE.Mesh(new THREE.BoxGeometry(0.088, 0.024, 0.022), hairMat);
     brow.position.set(bx, 0.115, 0.128);
     brow.rotation.z = sgn * 0.22;
-    head.add(brow);
+    r.head.add(brow);
   }
 
-  // arms — rolled shirt sleeves
-  const upperArmL = bone(chest, -0.3, 0.17, 0);
-  const forearmL = bone(upperArmL, 0, -0.25, 0);
-  const handL = bone(forearmL, 0, -0.23, 0);
-  const upperArmR = bone(chest, 0.3, 0.17, 0);
-  const forearmR = bone(upperArmR, 0, -0.25, 0);
-  const handR = bone(forearmR, 0, -0.23, 0);
-
-  const sleeveGeo = new THREE.CapsuleGeometry(0.075, 0.2, 6, 10);
+  // ---- arms — rolled shirt sleeves + shoulder pads ----------------------
+  const shoulderGeo = new THREE.SphereGeometry(0.078, 10, 8);
+  const sleeveGeo = new THREE.CapsuleGeometry(0.077, 0.2, 6, 10);
   const forearmGeo = new THREE.CapsuleGeometry(0.06, 0.18, 6, 10);
-  b.geos.push(sleeveGeo, forearmGeo);
-  for (const [u, f] of [[upperArmL, forearmL], [upperArmR, forearmR]] as const) {
+  b.geos.push(shoulderGeo, sleeveGeo, forearmGeo);
+  for (const [u, f] of [[r.upperArmL, r.forearmL], [r.upperArmR, r.forearmR]] as const) {
+    const sh = new THREE.Mesh(shoulderGeo, shirt);
+    sh.position.set(0, 0.04, 0);
+    u.add(sh);
     const s = new THREE.Mesh(sleeveGeo, shirt);
     s.position.set(0, -0.1, 0);
     u.add(s);
@@ -780,60 +829,54 @@ export function buildNischay(): CharacterRig {
   const watch = new THREE.Mesh(watchGeo, watchMat);
   watch.position.set(0, -0.045, 0.012);
   watch.rotation.z = 0.15;
-  handL.add(watch);
+  r.handL.add(watch);
 
-  const handGeo = new THREE.BoxGeometry(0.08, 0.07, 0.1);
+  // rounded palm + fingers
+  const handGeo = new THREE.SphereGeometry(0.053, 12, 10);
   b.geos.push(handGeo);
-  for (const h of [handL, handR]) {
+  for (const h of [r.handL, r.handR]) {
     const hm = new THREE.Mesh(handGeo, skin);
     hm.position.set(0, -0.03, 0.005);
+    hm.scale.set(1, 0.92, 1.25);
     h.add(hm);
   }
-  const fL = addFingers(handL, b, skin, -1);
-  const fR = addFingers(handR, b, skin, 1);
+  const fL = addFingers(r.handL, b, skin, -1);
+  const fR = addFingers(r.handR, b, skin, 1);
 
-  // legs
-  const thighL = bone(hips, -0.115, -0.12, 0);
-  const shinL = bone(thighL, 0, -0.32, 0);
-  const footL = bone(shinL, 0, -0.3, 0);
-  const thighR = bone(hips, 0.115, -0.12, 0);
-  const shinR = bone(thighR, 0, -0.32, 0);
-  const footR = bone(shinR, 0, -0.3, 0);
-
-  const legGeo = new THREE.CapsuleGeometry(0.085, 0.24, 6, 10);
-  b.geos.push(legGeo);
-  for (const [t, s] of [[thighL, shinL], [thighR, shinR]] as const) {
+  // ---- legs -------------------------------------------------------------
+  const legGeo = new THREE.CapsuleGeometry(0.082, 0.24, 6, 10);
+  const shinGeo = new THREE.CapsuleGeometry(0.082, 0.27, 6, 10);
+  b.geos.push(legGeo, shinGeo);
+  for (const [t, s] of [[r.thighL, r.shinL], [r.thighR, r.shinR]] as const) {
     const tm = new THREE.Mesh(legGeo, trousers);
     tm.position.set(0, -0.15, 0);
     t.add(tm);
-    const sm = new THREE.Mesh(legGeo, trousers);
-    sm.position.set(0, -0.15, 0);
+    const sm = new THREE.Mesh(shinGeo, trousers);
+    sm.position.set(0, -0.17, 0);
     s.add(sm);
   }
 
-  const shoeGeo = new THREE.BoxGeometry(0.11, 0.095, 0.26);
-  const shoeSole = new THREE.BoxGeometry(0.12, 0.045, 0.28);
+  // formal shoes, grounded on the road
+  const shoeGeo = new THREE.BoxGeometry(0.11, 0.11, 0.26);
+  const shoeSole = new THREE.BoxGeometry(0.12, 0.1, 0.28);
   b.geos.push(shoeGeo, shoeSole);
-  for (const foot of [footL, footR]) {
+  for (const foot of [r.footL, r.footR]) {
     const sn = new THREE.Mesh(shoeGeo, shoe);
-    sn.position.set(0, -0.05, 0.02);
+    sn.position.set(0, -0.08, 0.02);
     foot.add(sn);
     const so = new THREE.Mesh(shoeSole, shoe);
-    so.position.set(0, -0.11, 0.02);
+    so.position.set(0, -0.19, 0.02);
     foot.add(so);
   }
 
-  // ---- NISCHAY KAUSHAL printed on the light shirt back (no backing) ------
-  // two lines, big dark print — readable from the chase camera
-  addBackLabel(b, chest, "NISCHAY\nKAUSHAL", 0.12, -0.29, 0.6, 0.46, "#16324a", 0.3);
+  // ---- NISCHAY KAUSHAL printed directly on the light shirt back ----------
+  addBackLabel(b, r.chest, "NISCHAY\nKAUSHAL", 0.1, -0.185, 0.5, 0.44, { fg: "#12304a", outline: "#e9f2f7", shadow: "rgba(16,42,64,0.45)" }, 0.34);
 
   b.castAll();
 
   return {
-    group, hips, chest, neck, head,
-    upperArmL, upperArmR, forearmL, forearmR, handL, handR,
-    thighL, thighR, shinL, shinR, footL, footR,
-    eyeL, eyeR,
+    group, ...r,
+    eyeL: eyes.eyeL, eyeR: eyes.eyeR,
     fingersL: fL.fingers, fingersR: fR.fingers,
     thumbsL: fL.thumb, thumbsR: fR.thumb,
   };

@@ -192,15 +192,13 @@ export function TitCampusRunGame() {
           <div className="menu-inner">
             <p className="menu-kicker">TECHNOCRATS INSTITUTE OF TECHNOLOGY · BHOPAL</p>
             <h1 className="menu-title">TIT CAMPUS RUN</h1>
-            <p className="menu-subtitle">Gokul vs Nischay Kaushal</p>
+            <p className="menu-subtitle">GANDU STUDENT VS NISCHAY</p>
             <p className="menu-tag">
-              TNP class? No thanks. Gokul slipped out of the placement-cell session — but Nischay
-              Kaushal, the TNP Cell Head, is sprinting right behind him. One wrong move and he's
-              back in class! Dodge, jump and slide across TIT Bhopal.
+              “Bacche teri maa ki chut, tu TNP class nahi karega? Ruk, tera gand marta hu.
+              Class bunk karega re bdsk!” — Nischay Kaushal
             </p>
             <div className="menu-actions">
               <button className="btn btn-primary" onClick={play}>▶&nbsp; PLAY</button>
-              <button className="btn btn-ghost" onClick={() => { gameRef.current?.unlockAudio(); setShowHow(true); }}>HOW TO PLAY</button>
             </div>
             <button className="btn btn-ghost btn-mute" onClick={toggleMute}>
               {muted ? "🔇 SOUND OFF" : "🔊 SOUND ON"}

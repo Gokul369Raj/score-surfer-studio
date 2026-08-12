@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { buildGokul, buildNischay, makePose, resetPose, applyPose, type CharacterRig, type Pose } from "./characters";
+import { buildGokul, buildNischay, type CharacterRig } from "./characters";
+import { RiggedCharacter, type AnimState } from "./animations";
 import { Campus } from "./campus";
 import { GameAudio } from "./audio";
 
@@ -19,8 +20,8 @@ export interface GameEvents {
 }
 
 const LANE_X = [-2.1, 0, 2.1];
-const GRAVITY = 26;
-const JUMP_VY = 9.4; // higher, anime-style jump (~1.7 units peak)
+const GRAVITY = 24;
+const JUMP_VY = 11.2; // big anime-style jump (~2.6 units peak, longer air time)
 const SLIDE_TIME = 0.85;
 const BASE_SPEED = 13;
 const MAX_SPEED = 30;
@@ -39,14 +40,13 @@ export class TitCampusRun {
   private nischay: CharacterRig;
   private campus: Campus;
 
-  private poseIdle = makePose();
-  private poseRun = makePose();
-  private poseJump = makePose();
-  private poseSlide = makePose();
-  private poseCaught = makePose();
-  private poseChase = makePose();
-  private poseCatch = makePose();
-  private w = { idle: 1, run: 0, jump: 0, slide: 0, caught: 0 };
+  private gChar!: RiggedCharacter;
+  private nChar!: RiggedCharacter;
+  private gAnim: AnimState = "idle";
+  private nAnim: AnimState = "idle";
+  private gLandingT = 0;
+  private gHitT = 0;
+  private wasGrounded = true;
 
   screen: Screen = "menu";
   private quality: "high" | "low";
@@ -65,7 +65,6 @@ export class TitCampusRun {
   // run state
   private speed = BASE_SPEED;
   private elapsed = 0;
-  private runTime = 0;
   private score = 0;
   private coins = 0;
   private distance = 0;
@@ -150,6 +149,9 @@ export class TitCampusRun {
     this.nischay.group.position.set(0, 0, this.chaseGap);
     this.nischay.group.rotation.y = Math.PI;
 
+    this.gChar = new RiggedCharacter(this.gokul.group);
+    this.nChar = new RiggedCharacter(this.nischay.group);
+
     window.addEventListener("resize", this.onResize);
     document.addEventListener("visibilitychange", this.onVisibility);
     if (import.meta.env.DEV) {
@@ -178,7 +180,6 @@ export class TitCampusRun {
     this.chaseTarget = 7.5;
     this.speed = BASE_SPEED;
     this.elapsed = 0;
-    this.runTime = 0;
     this.score = 0;
     this.coins = 0;
     this.distance = 0;
@@ -195,12 +196,17 @@ export class TitCampusRun {
     this.campus.reset(20);
     this.campus.placeStartGate(-30);
     this.audio.stopChase();
-    this.audio.stopPlaylist();
+    this.audio.resetPlaylist(); // new run → shuffle to a different song
     this.chaseSoundOn = false;
     this.plOn = false;
     this.screen = "playing";
-    this.w.idle = 0;
-    this.w.run = 1;
+    this.gChar.snap("run");
+    this.gAnim = "run";
+    this.nChar.snap("run");
+    this.nAnim = "run";
+    this.gLandingT = 0;
+    this.gHitT = 0;
+    this.wasGrounded = true;
     this.emitStats();
     this.events.onHits(0);
   }
@@ -212,8 +218,12 @@ export class TitCampusRun {
     this.plOn = false;
     this.audio.click();
     this.screen = "menu";
-    this.w.run = 0;
-    this.w.idle = 1;
+    this.gChar.play("idle", 0.35);
+    this.gAnim = "idle";
+    this.nChar.play("idle", 0.35);
+    this.nAnim = "idle";
+    this.gLandingT = 0;
+    this.gHitT = 0;
     this.camera.position.set(0, 2.8, 8.4);
   }
 
@@ -372,9 +382,9 @@ export class TitCampusRun {
     if (this.chaseTimer > 0) this.chaseTimer -= dt;
     const gameOverSeq = this.gameOverTimer > 0;
     const chasing = this.chaseTimer > 0 || gameOverSeq;
-    this.chaseTarget = gameOverSeq ? 1.4 : chasing ? 2.8 : 7.5 + Math.min(5.5, this.elapsed * 0.35);
-    this.chaseGap = Math.max(this.chaseGap, 1.6);
-    const rate = THREE.MathUtils.clamp((this.chaseTarget - this.chaseGap) * 0.35, -5, 4.5);
+    this.chaseTarget = gameOverSeq ? 0.3 : chasing ? 2.8 : 7.5 + Math.min(5.5, this.elapsed * 0.35);
+    this.chaseGap = Math.max(this.chaseGap, gameOverSeq ? 0.22 : 1.6);
+    const rate = THREE.MathUtils.clamp((this.chaseTarget - this.chaseGap) * (gameOverSeq ? 6 : 0.35), -9, 4.5);
     this.chaseGap += rate * dt;
     // Nischay runs BEHIND Gokul (positive z = toward the camera) so his back
     // is what the player sees; he falls out of frame as he drops back.
@@ -428,9 +438,6 @@ export class TitCampusRun {
       this.audio.chaseWarning();
     }
     this.events.onChase(bar, onTail);
-
-    // run cycle phase
-    this.runTime += dt * (0.9 + this.speed / MAX_SPEED * 0.3);
 
     // collisions
     if (this.hitCooldown > 0) this.hitCooldown -= dt;
@@ -498,19 +505,19 @@ export class TitCampusRun {
       o.mesh.visible = false;
 
       this.hits++;
+      this.events.onHits(this.hits); // "1/3", "2/3", then "3/3"
       if (this.hits >= 3) {
         // caught! play the out sound (kya_re_lund_ke.mp3)
         this.audio.out();
-        this.gameOverTimer = 1.6;
-        this.w.caught = 1;
-        this.chaseTarget = 1.3;
-        this.chaseGap = Math.min(this.chaseGap, 3.4);
+        this.gameOverTimer = 1.8;
+        this.chaseTarget = 0.3; // Nischay closes right in and grabs him
+        this.chaseGap = Math.min(this.chaseGap, 3.2);
       } else {
         this.chaseTimer = 10; // 10s of hot pursuit, then he backs off again
-        this.events.onHits(this.hits); // "1/3" then "2/3"
         // stumble: brief slow-down
         this.speed = Math.max(BASE_SPEED, this.speed * 0.72);
         this.stumble = 1;
+        this.gHitT = 0.5; // one-shot hit reaction animation
       }
     }
   }
@@ -519,93 +526,83 @@ export class TitCampusRun {
 
   // ---------------------------------------------------------------- poses
 
+  // ------------------------------------------------------------ animations
+
   private updatePoses(dt: number) {
-    const t = this.runTime;
-    // --- Gokul
-    const g = this.gokul;
-    const gW = this.w;
+    // ---- Gokul: gameplay-driven animation state machine -------------------
+    const playing = this.screen === "playing";
+    const caughtSeq = this.screen === "gameover" || this.gameOverTimer > 0;
 
-    // smooth weights
-    const isCaughtSeq = this.screen === "gameover" || this.gameOverTimer > 0;
-    const target = this.screen === "playing" ? { idle: 0, run: 1, jump: 0, slide: 0, caught: isCaughtSeq ? 1 : 0 } : this.screen === "gameover" ? { idle: 0, run: 0, jump: 0, slide: 0, caught: 1 } : { idle: 1, run: 0, jump: 0, slide: 0, caught: 0 };
-    const k = 1 - Math.exp(-8 * dt);
-    gW.idle += (target.idle - gW.idle) * k;
-    gW.run += (target.run - gW.run) * k;
-    gW.jump += (target.jump - gW.jump) * k;
-    gW.slide += (target.slide - gW.slide) * k;
-    gW.caught += (target.caught - gW.caught) * k;
+    if (this.gLandingT > 0) this.gLandingT -= dt;
+    if (this.gHitT > 0) this.gHitT -= dt;
 
-    // active pose blending: jump overrides run, slide overrides both
-    const jw = this.grounded ? 0 : 1;
-    const sw = this.sliding ? 1 : 0;
-    const wRun = gW.run * (1 - jw) * (1 - sw);
-    const wJump = jw;
-    const wSlide = sw;
-    const wIdle = gW.idle;
-    const wCaught = gW.caught;
-    const sum = wRun + wJump + wSlide + wIdle + wCaught;
-    const n = sum > 0 ? 1 / sum : 1;
+    // landing trigger: just touched down after being airborne
+    if (this.grounded && !this.wasGrounded && playing && !caughtSeq) {
+      this.gLandingT = 0.34;
+    }
+    this.wasGrounded = this.grounded;
 
-    resetPose(this.poseRun);
-    resetPose(this.poseJump);
-    resetPose(this.poseSlide);
-    resetPose(this.poseCaught);
-    fillGokulIdle(this.poseIdle, this.elapsed);
-    fillGokulRun(this.poseRun, t);
-    fillJump(this.poseJump);
-    fillSlide(this.poseSlide);
-    fillCaught(this.poseCaught, this.elapsed);
+    let target: AnimState;
+    if (caughtSeq) target = "caught";
+    else if (!playing) target = "idle";
+    else if (this.sliding) target = "slide";
+    else if (!this.grounded) target = this.vy > 0 ? "jump" : "fall";
+    else if (this.gLandingT > 0) target = "landing";
+    else if (this.gHitT > 0) target = "hit";
+    else target = "run";
 
-    applyPose(g, { idle: wIdle * n, run: wRun * n, jump: wJump * n, slide: wSlide * n, caught: wCaught * n }, {
-      idle: this.poseIdle,
-      run: this.poseRun,
-      jump: this.poseJump,
-      slide: this.poseSlide,
-      caught: this.poseCaught,
-    });
+    if (target !== this.gAnim) {
+      const fade = target === "landing" ? 0.12 : target === "hit" ? 0.09 : 0.2;
+      this.gChar.play(target, fade);
+      this.gAnim = target;
+    }
+    this.gChar.setRunScale(THREE.MathUtils.clamp(this.speed / BASE_SPEED, 0.75, 2.1));
 
     // lane lean onto the whole body
-    g.group.rotation.z = -this.laneLean * 0.22;
+    this.gokul.group.rotation.z = -this.laneLean * 0.22;
 
     // stumble wobble after a hit
     if (this.stumble > 0) {
       this.stumble = Math.max(0, this.stumble - dt * 2.4);
-      g.group.rotation.z += Math.sin(this.elapsed * 30) * 0.08 * this.stumble;
+      this.gokul.group.rotation.z += Math.sin(this.elapsed * 30) * 0.08 * this.stumble;
     }
 
     // blink
     if (Math.sin(this.elapsed * 0.9) > 0.995) {
-      g.eyeL.scale.y = 0.1;
-      g.eyeR.scale.y = 0.1;
+      this.gokul.eyeL.scale.y = 0.1;
+      this.gokul.eyeR.scale.y = 0.1;
     } else {
-      g.eyeL.scale.y = 1;
-      g.eyeR.scale.y = 1;
+      this.gokul.eyeL.scale.y = 1;
+      this.gokul.eyeR.scale.y = 1;
     }
     // hair bounces — subtle, synchronized, and anchored to baseY (no drift)
-    for (const h of g.hair) {
+    for (const h of this.gokul.hair) {
       const baseY = (h.userData.baseY as number) ?? 0;
       h.position.y = baseY + Math.sin(this.elapsed * 5) * 0.005;
     }
 
     // fingers curl with pose
-    const curl = wRun * 1.0 + wIdle * 0.3 + wJump * 0.15 + wSlide * 0.6;
-    for (const f of g.fingersL) f.rotation.x = -curl;
-    for (const f of g.fingersR) f.rotation.x = -curl;
+    const curl =
+      target === "run" ? 1.0
+        : target === "idle" ? 0.3
+          : target === "slide" ? 0.6
+            : target === "jump" || target === "fall" ? 0.15
+              : 0.45;
+    for (const f of this.gokul.fingersL) f.rotation.x = -curl;
+    for (const f of this.gokul.fingersR) f.rotation.x = -curl;
 
-    // --- Nischay
-    const cg = this.nischay;
+    // ---- Nischay: run, or lunge to grab when he catches up ----------------
     const catching = this.gameOverTimer > 0 || this.chaseGap < 2.6;
-    resetPose(this.poseChase);
-    resetPose(this.poseCatch);
-    fillNischayRun(this.poseChase, t * 1.02);
-    fillCatch(this.poseCatch);
-    applyPose(cg, { idle: 0, run: catching ? 0 : 1, jump: 0, slide: 0, caught: catching ? 1 : 0 }, {
-      idle: this.poseIdle,
-      run: this.poseChase,
-      jump: this.poseJump,
-      slide: this.poseSlide,
-      caught: this.poseCatch,
-    });
+    const nTarget: AnimState = this.screen === "menu" ? "idle" : catching ? "grab" : "run";
+    if (nTarget !== this.nAnim) {
+      this.nChar.play(nTarget, 0.2);
+      this.nAnim = nTarget;
+    }
+    this.nChar.setRunScale(THREE.MathUtils.clamp(this.speed / BASE_SPEED, 0.75, 2.1));
+
+    // advance the animation mixers
+    this.gChar.update(dt);
+    this.nChar.update(dt);
   }
 
   private updateCamera(dt: number) {
@@ -625,12 +622,14 @@ export class TitCampusRun {
       return;
     }
 
-    if (this.screen === "gameover") {
-      // frame the caught moment
-      const tx = 0.5;
-      const tz = 6.4;
-      this.camPos.lerp(this.tmpA.set(tx, 2.3, tz), 1 - Math.exp(-4 * dt));
-      this.camLook.lerp(this.tmpB.set(0, 1.25, -1.2), 1 - Math.exp(-5 * dt));
+    const catchSeq = this.screen === "gameover" || this.gameOverTimer > 0;
+    if (catchSeq) {
+      // frame the caught moment from the side — Nischay's arms clearly
+      // wrapped around Gokul, both characters in frame
+      const tx = 1.75;
+      const tz = 1.3;
+      this.camPos.lerp(this.tmpA.set(tx, 2.0, tz), 1 - Math.exp(-4 * dt));
+      this.camLook.lerp(this.tmpB.set(0.0, 1.1, 0.12), 1 - Math.exp(-5 * dt));
       this.camera.position.copy(this.camPos);
       this.camera.lookAt(this.camLook);
       return;
@@ -655,142 +654,3 @@ export class TitCampusRun {
   }
 }
 
-// ------------------------------------------------------------------ poses
-
-function fillGokulIdle(p: Pose, t: number): void {
-  resetPose(p);
-  p.hips.rz = Math.sin(t * 0.9) * 0.02;
-  p.chest.rx = 0.04;
-  p.chest.rz = Math.sin(t * 0.9 + 0.6) * 0.02;
-  p.neck.rx = 0.06;
-  p.head.ry = Math.sin(t * 0.45) * 0.4;
-  p.head.rx = 0.02;
-  p.upperArmL.rz = 0.1;
-  p.upperArmR.rz = -0.1;
-  p.upperArmL.rx = Math.sin(t * 0.8) * 0.05;
-  p.upperArmR.rx = Math.sin(t * 0.8 + 0.5) * 0.05;
-  p.forearmL.rx = -0.35;
-  p.forearmR.rx = -0.35;
-  p.handL.rz = 0.12;
-  p.handR.rz = -0.12;
-}
-
-function fillGokulRun(p: Pose, t: number): void {
-  resetPose(p);
-  const ph = t * 10;
-  const s = Math.sin(ph);
-  const c = Math.cos(ph);
-  p.thighL.rx = s * 0.85;
-  p.thighR.rx = -s * 0.85;
-  p.shinL.rx = Math.max(0, -Math.sin(ph + 0.9)) * 1.4;
-  p.shinR.rx = Math.max(0, Math.sin(ph + 0.9)) * 1.4;
-  p.footL.rx = -0.2 - 0.15 * c;
-  p.footR.rx = -0.2 + 0.15 * c;
-  p.upperArmL.rx = -s * 1.0;
-  p.upperArmR.rx = s * 1.0;
-  p.upperArmL.rz = 0.12;
-  p.upperArmR.rz = -0.12;
-  p.forearmL.rx = -(0.7 + Math.max(0, s) * 0.4);
-  p.forearmR.rx = -(0.7 + Math.max(0, -s) * 0.4);
-  p.handL.rz = -0.28;
-  p.handR.rz = 0.28;
-  p.hips.rx = 0.08;
-  p.hips.ry = s * 0.1;
-  p.chest.rx = 0.16 + c * 0.03;
-  p.chest.rz = c * 0.03;
-  p.neck.rx = -0.13;
-  p.head.rz = -s * 0.035;
-}
-
-function fillJump(p: Pose): void {
-  resetPose(p);
-  p.hips.rx = 0.12;
-  p.chest.rx = 0.1;
-  p.neck.rx = -0.08;
-  p.head.rx = -0.15;
-  p.thighL.rx = 1.0;
-  p.thighR.rx = 1.0;
-  p.shinL.rx = -1.05;
-  p.shinR.rx = -1.05;
-  p.footL.rx = -0.3;
-  p.footR.rx = -0.3;
-  p.upperArmL.rx = -1.4;
-  p.upperArmR.rx = -1.4;
-  p.upperArmL.rz = 0.3;
-  p.upperArmR.rz = -0.3;
-  p.forearmL.rx = 0.5;
-  p.forearmR.rx = 0.5;
-}
-
-function fillSlide(p: Pose): void {
-  resetPose(p);
-  p.hips.rx = -1.15; // hips back, chest down
-  p.chest.rx = 0.85;
-  p.neck.rx = -0.3;
-  p.head.rx = -0.25;
-  p.thighL.rx = -0.9; // legs forward
-  p.thighR.rx = -0.9;
-  p.shinL.rx = 0.9;
-  p.shinR.rx = 0.9;
-  p.footL.rx = -0.2;
-  p.footR.rx = -0.2;
-  p.upperArmL.rx = 1.2; // arms trailing back
-  p.upperArmR.rx = 1.2;
-  p.upperArmL.rz = 0.25;
-  p.upperArmR.rz = -0.25;
-  p.forearmL.rx = -0.8;
-  p.forearmR.rx = -0.8;
-}
-
-function fillCaught(p: Pose, t: number): void {
-  resetPose(p);
-  p.chest.rx = 0.08 + Math.sin(t * 10) * 0.03;
-  p.neck.rx = -0.1;
-  p.head.rx = -0.3 + Math.sin(t * 12) * 0.05;
-  p.upperArmL.rx = -2.9; // arms up — surrender!
-  p.upperArmR.rx = -2.9;
-  p.upperArmL.rz = 0.5;
-  p.upperArmR.rz = -0.5;
-  p.forearmL.rx = -0.4;
-  p.forearmR.rx = -0.4;
-  p.thighL.rx = 0.15;
-  p.thighR.rx = 0.15;
-  p.shinL.rx = 0.3;
-  p.shinR.rx = 0.3;
-}
-
-function fillNischayRun(p: Pose, t: number): void {
-  resetPose(p);
-  const ph = t * 10;
-  const s = Math.sin(ph);
-  p.thighL.rx = s * 0.95;
-  p.thighR.rx = -s * 0.95;
-  p.shinL.rx = Math.max(0, -Math.sin(ph + 0.9)) * 1.5;
-  p.shinR.rx = Math.max(0, Math.sin(ph + 0.9)) * 1.5;
-  p.upperArmL.rx = -s * 1.15;
-  p.upperArmR.rx = s * 1.15;
-  p.forearmL.rx = -0.85;
-  p.forearmR.rx = -0.85;
-  p.hips.rx = 0.1;
-  p.chest.rx = 0.2;
-  p.neck.rx = -0.18;
-  p.head.rx = -0.12;
-}
-
-function fillCatch(p: Pose): void {
-  resetPose(p);
-  p.chest.rx = 0.35; // lunging forward
-  p.hips.rx = 0.15;
-  p.neck.rx = -0.3;
-  p.head.rx = -0.2;
-  p.upperArmL.rx = -1.5; // arms reaching out to grab
-  p.upperArmR.rx = -1.5;
-  p.upperArmL.rz = 0.35;
-  p.upperArmR.rz = -0.35;
-  p.forearmL.rx = 0.9;
-  p.forearmR.rx = 0.9;
-  p.thighL.rx = 0.7;
-  p.thighR.rx = 0.7;
-  p.shinL.rx = 0.6;
-  p.shinR.rx = 0.6;
-}

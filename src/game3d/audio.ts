@@ -18,8 +18,9 @@ export class GameAudio {
   private outBuf: AudioBuffer | null = null;
   private outLoading = false;
 
-  // after-chase playlist — 3 songs play one after another, looping, while
-  // Nischay is NOT chasing (pakad-mc takes over during hot pursuit)
+  // after-chase playlist — songs play one after another (shuffled, no
+  // immediate repeats), resuming from where they left off when a chase
+  // interrupts them. pakad-mc takes over during hot pursuit.
   private playlistUrls = [
     "dilwa-mange-gamcha.mp3",
     "bagal-wali-jaan-mareli.mp3",
@@ -34,6 +35,10 @@ export class GameAudio {
   private plWanted = false;
   private plSrc: AudioBufferSourceNode | null = null;
   private plGain: GainNode | null = null;
+  private plStartAt = 0; // ctx time when the current track started playing
+  private plStartOffset = 0; // buffer offset where the current track started
+  private plOffset = 0; // resume position inside the current track (seconds)
+  private plSkipNext = false; // next start picks a different random track
 
   /** Must be called from a user gesture (start button / first tap). */
   unlock() {
@@ -68,6 +73,10 @@ export class GameAudio {
     this.plWanted = false;
     if (this.plSrc) {
       const s = this.plSrc;
+      // remember where we were so the song can resume (not restart)
+      if (this.ctx) {
+        this.plOffset = this.plStartOffset + (this.ctx.currentTime - this.plStartAt);
+      }
       this.plSrc = null;
       if (this.plGain) {
         this.plGain.disconnect();
@@ -83,10 +92,43 @@ export class GameAudio {
     }
   }
 
+  /**
+   * New run: stop whatever is playing and make the next playlist start jump
+   * to a different random track (so a replay never starts the same song).
+   */
+  resetPlaylist() {
+    this.stopPlaylist();
+    this.plSkipNext = true;
+    this.plOffset = 0;
+  }
+
+  /** Random playlist index that differs from the current one. */
+  private pickOtherIndex(): number {
+    const n = this.playlistUrls.length;
+    if (n <= 1) return this.plIdx;
+    let i = Math.floor(Math.random() * (n - 1));
+    if (i >= this.plIdx) i++;
+    return i;
+  }
+
   private ensurePlay() {
     if (!this.plWanted || this.plSrc || !this.ctx || !this.master) return;
+
+    // brand-new run → jump to a different random track
+    if (this.plSkipNext) {
+      this.plSkipNext = false;
+      this.plIdx = this.pickOtherIndex();
+      this.plOffset = 0;
+    }
+
     const buf = this.plBufs[this.plIdx];
     if (buf) {
+      // the saved resume offset is past the end of the track — move on
+      if (this.plOffset >= buf.duration - 0.05) {
+        this.plIdx = this.pickOtherIndex();
+        this.plOffset = 0;
+      }
+      const off = Math.min(Math.max(0, this.plOffset), Math.max(0, buf.duration - 0.05));
       const src = this.ctx.createBufferSource();
       src.buffer = buf;
       const gain = this.ctx.createGain();
@@ -99,12 +141,15 @@ export class GameAudio {
           this.plGain.disconnect();
           this.plGain = null;
         }
-        this.plIdx = (this.plIdx + 1) % this.playlistUrls.length;
+        this.plIdx = this.pickOtherIndex();
+        this.plOffset = 0;
         this.ensurePlay();
       };
-      src.start();
+      src.start(0, off);
       this.plSrc = src;
       this.plGain = gain;
+      this.plStartOffset = off;
+      this.plStartAt = this.ctx.currentTime;
       return;
     }
     // current track still loading — kick the load; completion retries ensurePlay
