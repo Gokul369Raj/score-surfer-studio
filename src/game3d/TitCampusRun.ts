@@ -506,10 +506,10 @@ export class TitCampusRun {
 
       this.hits++;
       this.events.onHits(this.hits); // "1/3", "2/3", then "3/3"
-      if (this.hits >= 3) {
+      if (this.hits === 3) {
         // caught! play the out sound (kya_re_lund_ke.mp3)
         this.audio.out();
-        this.gameOverTimer = 1.8;
+        this.gameOverTimer = 2.4; // slow-mo catch stays on screen longer
         this.chaseTarget = 0.3; // Nischay closes right in and grabs him
         this.chaseGap = Math.min(this.chaseGap, 3.2);
       } else {

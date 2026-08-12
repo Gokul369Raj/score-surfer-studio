@@ -196,7 +196,13 @@ body {
 
 .menu-overlay,
 .gameover-overlay {
-  background: linear-gradient(180deg, rgba(5, 14, 22, 0.5) 0%, rgba(5, 14, 22, 0.9) 70%);
+  background: linear-gradient(180deg, rgba(5, 14, 22, 0.2) 0%, rgba(5, 14, 22, 0.6) 75%);
+}
+
+/* keep the catch scene visible — card sits low, characters stay in frame */
+.gameover-overlay {
+  align-items: flex-end;
+  padding-bottom: 18px;
 }
 
 .menu-inner,
