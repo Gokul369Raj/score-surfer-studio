@@ -123,6 +123,21 @@ export function TitCampusRunGame() {
     g.unlockAudio();
     g.start();
     setScreen("playing");
+    // mobile only: fill the whole screen when the run starts
+    const mobile = Math.min(window.innerWidth, window.innerHeight) < 820;
+    if (mobile) {
+      const el = document.documentElement as HTMLElement & {
+        webkitRequestFullscreen?: () => Promise<void> | void;
+        msRequestFullscreen?: () => Promise<void> | void;
+      };
+      try {
+        const req = el.requestFullscreen?.bind(el) ?? el.webkitRequestFullscreen?.bind(el) ?? el.msRequestFullscreen?.bind(el);
+        const p = req?.() as Promise<void> | void | undefined;
+        if (p && typeof (p as Promise<void>).catch === "function") (p as Promise<void>).catch(() => {});
+      } catch {
+        /* fullscreen unsupported (e.g. iPhone Safari) — game still works */
+      }
+    }
   };
   const resume = () => {
     gameRef.current?.resume();
@@ -135,6 +150,8 @@ export function TitCampusRunGame() {
   const toMenu = () => {
     gameRef.current?.backToMenu();
     setScreen("menu");
+    // leave fullscreen when returning to the menu
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   };
   const toggleMute = () => {
     const m = !muted;

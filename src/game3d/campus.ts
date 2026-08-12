@@ -89,9 +89,9 @@ function windowTexture(tint: string, rows: number, cols: number): THREE.CanvasTe
   return tex;
 }
 
-function textTexture(text: string, opts: { fg?: string; bg?: string } = {}): THREE.CanvasTexture {
+function textTexture(text: string, opts: { fg?: string; bg?: string; w?: number } = {}): THREE.CanvasTexture {
   const { fg = "#ffffff", bg = "#0d3b4f" } = opts;
-  const W = 1024;
+  const W = opts.w ?? 1024;
   const H = 430;
   const c = document.createElement("canvas");
   c.width = W;
@@ -629,20 +629,20 @@ function makeBuilding(name: string, kind: number): THREE.Group {
     g.add(pillar);
   }
 
-  // name boards — road-facing sides AND front/back
-  const boardTex = textTexture(name, { bg: "#0d3b4f", fg: "#8ef5c9" });
+  // name boards — bigger + higher-res so they stay readable from far on mobile
+  const boardTex = textTexture(name, { bg: "#0d3b4f", fg: "#8ef5c9", w: 1536 });
   const boardMat = new THREE.MeshBasicMaterial({ map: boardTex, side: THREE.DoubleSide });
-  const sideBoardGeo = new THREE.PlaneGeometry(4.4, 1.3);
+  const sideBoardGeo = new THREE.PlaneGeometry(5.2, 1.5);
   for (const s of [-1, 1]) {
     const board = new THREE.Mesh(sideBoardGeo, boardMat);
-    board.position.set(s * (w / 2 + 0.05), 2.6, 0);
+    board.position.set(s * (w / 2 + 0.06), 2.8, 0);
     board.rotation.y = s * (Math.PI / 2);
     g.add(board);
   }
-  const frontBoardGeo = new THREE.PlaneGeometry(w - 0.15, 1.55);
+  const frontBoardGeo = new THREE.PlaneGeometry(w + 0.1, 1.7);
   for (const s of [-1, 1]) {
     const board = new THREE.Mesh(frontBoardGeo, boardMat);
-    board.position.set(0, 3.15, s * (3.2 / 2 + 0.05));
+    board.position.set(0, 3.2, s * (3.2 / 2 + 0.06));
     board.rotation.y = s === 1 ? 0 : Math.PI;
     g.add(board);
   }
