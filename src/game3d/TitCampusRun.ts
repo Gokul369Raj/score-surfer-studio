@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { buildGokul, buildNischay, type CharacterRig } from "./characters";
 import { RiggedCharacter, type AnimState } from "./animations";
+import type { KenneyPlayerModel } from "./kenneyCharacter";
 import { Campus } from "./campus";
 import { GameAudio } from "./audio";
 
@@ -19,10 +20,21 @@ export interface GameEvents {
   onGameOver(s: GameStats): void;
 }
 
+/** Minimal player rig — either the procedural character or the Kenney model. */
+interface PlayerRig {
+  group: THREE.Group;
+  hair?: THREE.Mesh[];
+  eyeL?: THREE.Group;
+  eyeR?: THREE.Group;
+  fingersL?: THREE.Mesh[];
+  fingersR?: THREE.Mesh[];
+}
+
 const LANE_X = [-2.1, 0, 2.1];
-const GRAVITY = 24;
-const JUMP_VY = 11.2; // big anime-style jump (~2.6 units peak, longer air time)
+const GRAVITY = 25.5;
+const JUMP_VY = 12.2; // big anime-style jump with enough hang time for coin arcs
 const SLIDE_TIME = 0.85;
+const INPUT_BUFFER = 0.18;
 const BASE_SPEED = 13;
 const MAX_SPEED = 30;
 const RAMP = 0.07; // speed gained per second of play
@@ -36,7 +48,7 @@ export class TitCampusRun {
   private events: GameEvents;
   private audio = new GameAudio();
 
-  private gokul: CharacterRig & { hair: THREE.Mesh[] };
+  private gokul: PlayerRig;
   private nischay: CharacterRig;
   private campus: Campus;
 
@@ -61,6 +73,8 @@ export class TitCampusRun {
   private sliding = false;
   private slideTimer = 0;
   private laneLean = 0;
+  private inputBuffer: "jump" | "slide" | null = null;
+  private inputBufferT = 0;
 
   // run state
   private speed = BASE_SPEED;
@@ -92,7 +106,7 @@ export class TitCampusRun {
   private rafId = 0;
   private disposed = false;
 
-  constructor(container: HTMLElement, events: GameEvents) {
+  constructor(container: HTMLElement, events: GameEvents, playerModel?: KenneyPlayerModel | null) {
     this.container = container;
     this.events = events;
 
@@ -139,7 +153,14 @@ export class TitCampusRun {
     this.campus = new Campus(this.scene);
     this.campus.placeStartGate(-16);
 
-    this.gokul = buildGokul();
+    if (playerModel) {
+      // Kenney CC0 character — same rig interface, same animation states
+      this.gokul = { group: playerModel.group };
+      this.gChar = new RiggedCharacter(playerModel.group, playerModel.clips, playerModel.runCadence);
+    } else {
+      this.gokul = buildGokul();
+      this.gChar = new RiggedCharacter(this.gokul.group);
+    }
     this.scene.add(this.gokul.group);
     this.gokul.group.position.set(0, 0, 0);
     this.gokul.group.rotation.y = Math.PI;
@@ -149,7 +170,6 @@ export class TitCampusRun {
     this.nischay.group.position.set(0, 0, this.chaseGap);
     this.nischay.group.rotation.y = Math.PI;
 
-    this.gChar = new RiggedCharacter(this.gokul.group);
     this.nChar = new RiggedCharacter(this.nischay.group);
 
     window.addEventListener("resize", this.onResize);
@@ -190,6 +210,8 @@ export class TitCampusRun {
     this.sliding = false;
     this.laneIdx = 1;
     this.laneLean = 0;
+    this.inputBuffer = null;
+    this.inputBufferT = 0;
     this.hitCooldown = 0;
     this.gameOverTimer = 0;
     this.timeScale = 1;
@@ -258,20 +280,39 @@ export class TitCampusRun {
 
   jump() {
     if (this.screen !== "playing") return;
-    if (!this.grounded) return;
+    if (!this.grounded) {
+      this.inputBuffer = "jump";
+      this.inputBufferT = INPUT_BUFFER;
+      return;
+    }
+    this.performJump();
+  }
+
+  private performJump() {
     if (this.sliding) this.sliding = false;
     this.vy = JUMP_VY;
     this.grounded = false;
+    this.inputBuffer = null;
+    this.inputBufferT = 0;
     this.audio.jump();
   }
 
   slide() {
     if (this.screen !== "playing") return;
-    if (this.grounded) {
-      this.sliding = true;
-      this.slideTimer = SLIDE_TIME;
-      this.audio.slide();
+    if (!this.grounded) {
+      this.inputBuffer = "slide";
+      this.inputBufferT = INPUT_BUFFER;
+      return;
     }
+    this.performSlide();
+  }
+
+  private performSlide() {
+    this.sliding = true;
+    this.slideTimer = SLIDE_TIME;
+    this.inputBuffer = null;
+    this.inputBufferT = 0;
+    this.audio.slide();
   }
 
   dispose() {
@@ -364,6 +405,15 @@ export class TitCampusRun {
         this.playerY = 0;
         this.vy = 0;
         this.grounded = true;
+      }
+    }
+    if (this.inputBufferT > 0) {
+      this.inputBufferT -= dt;
+      if (this.grounded && this.inputBuffer) {
+        if (this.inputBuffer === "jump") this.performJump();
+        else this.performSlide();
+      } else if (this.inputBufferT <= 0) {
+        this.inputBuffer = null;
       }
     }
     if (this.sliding) {
@@ -561,35 +611,48 @@ export class TitCampusRun {
     // lane lean onto the whole body
     this.gokul.group.rotation.z = -this.laneLean * 0.22;
 
+    const scaleTarget =
+      target === "slide" ? this.tmpA.set(1.08, 0.82, 1.14)
+        : target === "landing" ? this.tmpA.set(1.1, 0.9, 1.08)
+          : target === "jump" ? this.tmpA.set(0.96, 1.08, 0.96)
+            : this.tmpA.set(1, 1, 1);
+    this.gokul.group.scale.lerp(scaleTarget, 1 - Math.exp(-12 * dt));
+
     // stumble wobble after a hit
     if (this.stumble > 0) {
       this.stumble = Math.max(0, this.stumble - dt * 2.4);
       this.gokul.group.rotation.z += Math.sin(this.elapsed * 30) * 0.08 * this.stumble;
     }
 
-    // blink
-    if (Math.sin(this.elapsed * 0.9) > 0.995) {
-      this.gokul.eyeL.scale.y = 0.1;
-      this.gokul.eyeR.scale.y = 0.1;
-    } else {
-      this.gokul.eyeL.scale.y = 1;
-      this.gokul.eyeR.scale.y = 1;
+    // blink (procedural rig only — the Kenney model has baked eyes)
+    if (this.gokul.eyeL) {
+      if (Math.sin(this.elapsed * 0.9) > 0.995) {
+        this.gokul.eyeL.scale.y = 0.1;
+        this.gokul.eyeR!.scale.y = 0.1;
+      } else {
+        this.gokul.eyeL.scale.y = 1;
+        this.gokul.eyeR!.scale.y = 1;
+      }
     }
     // hair bounces — subtle, synchronized, and anchored to baseY (no drift)
-    for (const h of this.gokul.hair) {
-      const baseY = (h.userData.baseY as number) ?? 0;
-      h.position.y = baseY + Math.sin(this.elapsed * 5) * 0.005;
+    if (this.gokul.hair) {
+      for (const h of this.gokul.hair) {
+        const baseY = (h.userData.baseY as number) ?? 0;
+        h.position.y = baseY + Math.sin(this.elapsed * 5) * 0.005;
+      }
     }
 
-    // fingers curl with pose
-    const curl =
-      target === "run" ? 1.0
-        : target === "idle" ? 0.3
-          : target === "slide" ? 0.6
-            : target === "jump" || target === "fall" ? 0.15
-              : 0.45;
-    for (const f of this.gokul.fingersL) f.rotation.x = -curl;
-    for (const f of this.gokul.fingersR) f.rotation.x = -curl;
+    // fingers curl with pose (procedural rig only)
+    if (this.gokul.fingersL) {
+      const curl =
+        target === "run" ? 1.0
+          : target === "idle" ? 0.3
+            : target === "slide" ? 0.6
+              : target === "jump" || target === "fall" ? 0.15
+                : 0.45;
+      for (const f of this.gokul.fingersL) f.rotation.x = -curl;
+      for (const f of this.gokul.fingersR!) f.rotation.x = -curl;
+    }
 
     // ---- Nischay: run, or lunge to grab when he catches up ----------------
     const catching = this.gameOverTimer > 0 || this.chaseGap < 2.6;
@@ -648,9 +711,9 @@ export class TitCampusRun {
     this.camLook.lerp(targetLook, 1 - Math.exp(-9 * dt));
     this.camera.position.copy(this.camPos);
     this.camera.lookAt(this.camLook);
+    this.camera.rotation.z += this.laneLean * 0.035;
     const targetFov = 58 + Math.min(10, (this.speed - BASE_SPEED) * 0.5);
     this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 3, dt);
     this.camera.updateProjectionMatrix();
   }
 }
-

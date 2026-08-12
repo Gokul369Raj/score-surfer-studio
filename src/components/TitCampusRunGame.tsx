@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { TitCampusRun, type GameStats, type Screen } from "../game3d/TitCampusRun";
+import { loadKenneyPlayer, type KenneyPlayerModel } from "../game3d/kenneyCharacter";
 
 const KEYMAP: Record<string, "left" | "right" | "jump" | "slide" | "pause"> = {
   ArrowLeft: "left",
@@ -23,6 +24,8 @@ const KEYMAP: Record<string, "left" | "right" | "jump" | "slide" | "pause"> = {
 export function TitCampusRunGame() {
   const mountRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<TitCampusRun | null>(null);
+  const [ready, setReady] = useState(false);
+  const [kenney, setKenney] = useState<KenneyPlayerModel | null>(null);
   const [screen, setScreen] = useState<Screen>("menu");
   const [showHow, setShowHow] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -39,9 +42,31 @@ export function TitCampusRunGame() {
   screenRef.current = screen;
   const swipe = useRef({ sx: 0, sy: 0, down: false, locked: false });
 
+  // preload the Kenney CC0 player model (cached singleton; falls back to the
+  // procedural character if the download or retarget ever fails)
+  useEffect(() => {
+    let cancelled = false;
+    loadKenneyPlayer()
+      .then((m) => {
+        if (!cancelled) {
+          setKenney(m);
+          setReady(true);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn("Kenney character unavailable — using procedural player.", err);
+          setReady(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const mount = mountRef.current;
-    if (!mount) return;
+    if (!mount || !ready || gameRef.current) return;
     const game = new TitCampusRun(mount, {
       onStats: (s) => {
         if (scoreRef.current) scoreRef.current.textContent = String(s.score);
@@ -67,7 +92,7 @@ export function TitCampusRunGame() {
         setFinalStats(s);
         setScreen("gameover");
       },
-    });
+    }, kenney);
     gameRef.current = game;
 
     const onKey = (e: KeyboardEvent) => {
@@ -90,7 +115,7 @@ export function TitCampusRunGame() {
       game.dispose();
       gameRef.current = null;
     };
-  }, []);
+  }, [ready, kenney]);
 
   // ---- swipe controls ----------------------------------------------------
   const onPointerDown = (e: React.PointerEvent) => {
@@ -193,15 +218,31 @@ export function TitCampusRunGame() {
 
         {/* Nischay chase meter — compact pill: name + hits */}
         <div className="chase-box">
-          <span className="chase-name">NISCHAY KAUSHAL</span>
-          <span className="chase-hits" ref={hitsRef}>0/3 HITS</span>
+          <div className="chase-meta">
+            <span className="chase-name">NISCHAY KAUSHAL</span>
+            <span className="chase-hits" ref={hitsRef}>0/3 HITS</span>
+          </div>
+          <div className="chase-track" aria-hidden="true">
+            <div className="chase-fill" ref={barRef} />
+          </div>
+          <span className="chase-tail" ref={tailRef}>GAINING...</span>
         </div>
       </div>
 
       {/* touch controls: swipe-only (no on-screen buttons) */}
 
+      {/* -------------------------------------------------- LOADING GATE */}
+      {!ready && (
+        <div className="overlay">
+          <div className="pause-card">
+            <h2>LOADING WORLD…</h2>
+            <p className="menu-tag">Preparing the campus…</p>
+          </div>
+        </div>
+      )}
+
       {/* ---------------------------------------------------- START SCREEN */}
-      {screen === "menu" && (
+      {ready && screen === "menu" && (
         <div className="overlay menu-overlay">
           <div className="menu-inner">
             <p className="menu-kicker">TECHNOCRATS INSTITUTE OF TECHNOLOGY · BHOPAL</p>
@@ -213,11 +254,12 @@ export function TitCampusRunGame() {
             </p>
             <div className="menu-actions">
               <button className="btn btn-primary" onClick={play}>▶&nbsp; PLAY</button>
+              <button className="btn btn-ghost btn-compact" onClick={() => setShowHow(true)}>HOW TO PLAY</button>
             </div>
             <button className="btn btn-ghost btn-mute" onClick={toggleMute}>
               {muted ? "🔇 SOUND OFF" : "🔊 SOUND ON"}
             </button>
-            <p className="menu-foot">Original fan-made campus runner · No copyrighted assets</p>
+            <p className="menu-foot">Fan-made campus runner · Handcrafted visual world</p>
           </div>
         </div>
       )}

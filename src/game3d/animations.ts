@@ -450,16 +450,19 @@ export class RiggedCharacter {
   readonly mixer: THREE.AnimationMixer;
   readonly actions: Record<AnimState, THREE.AnimationAction>;
   state: AnimState = "idle";
+  private runCadence = 1;
 
-  constructor(root: THREE.Group) {
+  constructor(root: THREE.Group, clips?: Record<AnimState, THREE.AnimationClip>, runCadence = 1) {
     this.root = root;
+    this.runCadence = runCadence;
     this.mixer = new THREE.AnimationMixer(root);
     const actions = {} as Record<AnimState, THREE.AnimationAction>;
     const states: AnimState[] = [
       "idle", "run", "jump", "fall", "landing", "slide", "hit", "caught", "grab",
     ];
+    const clipSet = clips ?? CLIPS;
     for (const s of states) {
-      const act = this.mixer.clipAction(CLIPS[s]);
+      const act = this.mixer.clipAction(clipSet[s]);
       act.setEffectiveWeight(s === "idle" ? 1 : 0);
       act.setEffectiveTimeScale(1);
       if (ONE_SHOTS.has(s)) {
@@ -506,7 +509,7 @@ export class RiggedCharacter {
 
   /** Scale run-cadence to the player's current speed (BASE_SPEED = 1). */
   setRunScale(s: number) {
-    this.actions.run.timeScale = s;
+    this.actions.run.timeScale = s * this.runCadence;
   }
 
   update(dt: number) {

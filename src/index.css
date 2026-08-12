@@ -11,6 +11,8 @@
   --panel: rgba(13, 27, 42, 0.86);
   --border: #2e4a63;
   --chunky-shadow: 0 4px 0 rgba(8, 18, 28, 0.9);
+  --glass: rgba(9, 24, 39, 0.74);
+  --glass-edge: rgba(176, 230, 255, 0.28);
 }
 
 * {
@@ -95,6 +97,13 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 74px;
+  padding: 8px 11px 9px;
+  border: 1px solid var(--glass-edge);
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(28, 64, 86, 0.82), var(--glass));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 5px 16px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(8px);
 }
 
 .stat-label {
@@ -142,18 +151,23 @@ body {
   outline-offset: 2px;
 }
 
-/* chase meter — compact pill: name + hits inline */
+/* chase meter */
 .chase-box {
   margin-top: 8px;
-  display: inline-flex;
+  width: min(330px, calc(100vw - 28px));
+  padding: 8px 10px 9px;
+  border-radius: 15px;
+  border: 1px solid rgba(255, 210, 63, 0.62);
+  background: linear-gradient(135deg, rgba(38, 44, 53, 0.88), rgba(12, 30, 46, 0.88));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.13), 0 5px 16px rgba(0, 0, 0, 0.26);
+  backdrop-filter: blur(9px);
+}
+
+.chase-meta {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  padding: 4px 12px;
-  border-radius: 99px;
-  border: 2px solid var(--accent-2);
-  background: var(--panel);
-  max-width: 100%;
-  box-shadow: 0 2px 0 rgba(8, 18, 28, 0.8);
 }
 
 .chase-name {
@@ -172,6 +186,38 @@ body {
   color: var(--ink);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
   white-space: nowrap;
+}
+
+.chase-track {
+  height: 6px;
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 999px;
+  background: rgba(4, 12, 20, 0.72);
+}
+
+.chase-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #ffc83d 0%, #ff8749 62%, #ff4d5e 100%);
+  box-shadow: 0 0 9px rgba(255, 125, 66, 0.86);
+  transition: width 0.22s ease;
+}
+
+.chase-tail {
+  display: block;
+  margin-top: 5px;
+  color: #b9d7e8;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.chase-tail.tail-hot {
+  color: #ff6a73;
+  text-shadow: 0 0 10px rgba(255, 77, 94, 0.8);
 }
 
 .chase-hits.flash {
@@ -212,6 +258,15 @@ body {
   max-width: 580px;
   width: 100%;
   animation: rise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.menu-inner {
+  padding: 26px 24px 24px;
+  border: 1px solid rgba(212, 239, 255, 0.18);
+  border-radius: 28px;
+  background: linear-gradient(145deg, rgba(16, 53, 75, 0.51), rgba(5, 17, 28, 0.45));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 20px 70px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(7px);
 }
 
 .menu-kicker {
@@ -298,6 +353,11 @@ body {
 .btn-ghost:hover {
   border-color: var(--accent);
   background: #1b324b;
+}
+
+.btn-compact {
+  padding-inline: 20px;
+  font-size: 13px;
 }
 
 .btn-mute {
@@ -446,9 +506,8 @@ body {
     font-size: 21px;
   }
   .chase-box {
-    padding: 3px 10px;
+    padding: 6px 9px 7px;
     margin-top: 6px;
-    gap: 8px;
   }
   .chase-name {
     font-size: 10px;

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 /**
  * TIT Campus Run — procedural stylized campus world (visual-upgrade edition).
@@ -584,16 +585,47 @@ function makeParkedCar(): THREE.Group {
 
 const BUILDING_NAMES = ["TIT MAIN", "TIT EXCELLENCE", "TIT ADVANCE", "TIT SCIENCE"];
 const BUILDING_TINTS = ["#d9c8a8", "#c7b79a", "#b9c6cf", "#d8c2a8"];
+const KENNEY_CITY_ASSETS = [
+  "building-type-a.glb",
+  "building-type-c.glb",
+  "building-type-f.glb",
+  "building-type-j.glb",
+  "building-type-m.glb",
+  "building-type-r.glb",
+] as const;
+const KENNEY_DETAIL_ASSETS = [
+  "tree-large.glb",
+  "tree-small.glb",
+  "fence.glb",
+  "fence-2x3.glb",
+  "planter.glb",
+  "path-stones-short.glb",
+] as const;
 
 function makeBuilding(name: string, kind: number): THREE.Group {
   const g = new THREE.Group();
   const h = 4 + kind * 2.2;
   const w = 4.2 + kind * 0.8;
   const tex = windowTexture(BUILDING_TINTS[kind % BUILDING_TINTS.length], kind === 2 ? 4 : 3, kind === 2 ? 4 : 3);
-  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, 3.2), mat);
+  const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.72, metalness: 0.06 });
+  const bodyGeo = new THREE.BoxGeometry(w, h, 3.2);
+  const body = new THREE.Mesh(bodyGeo, mat);
   body.position.y = h / 2;
   g.add(body);
+
+  const trimMat = new THREE.MeshStandardMaterial({ color: 0xf3ead8, roughness: 0.42, metalness: 0.12 });
+  const edgeMat = new THREE.LineBasicMaterial({ color: 0x385160, transparent: true, opacity: 0.52 });
+  const edges = new THREE.LineSegments(new THREE.EdgesGeometry(bodyGeo), edgeMat);
+  edges.position.copy(body.position);
+  g.add(edges);
+  const cornerGeo = new THREE.BoxGeometry(0.14, h + 0.12, 0.15);
+  for (const x of [-w / 2, w / 2]) {
+    for (const z of [-1.6, 1.6]) {
+      const corner = new THREE.Mesh(cornerGeo, trimMat);
+      corner.position.set(x, h / 2, z);
+      g.add(corner);
+    }
+  }
 
   // podium + parapet
   const podiumMat = new THREE.MeshStandardMaterial({ color: 0x8d6f52, roughness: 0.85 });
@@ -604,6 +636,10 @@ function makeBuilding(name: string, kind: number): THREE.Group {
   const parapet = new THREE.Mesh(new THREE.BoxGeometry(w + 0.5, 0.35, 3.6), roofMat);
   parapet.position.y = h + 0.18;
   g.add(parapet);
+  const roofGlowMat = new THREE.MeshStandardMaterial({ color: 0xffd36e, emissive: 0xb55e13, emissiveIntensity: 1.2, roughness: 0.45 });
+  const roofGlow = new THREE.Mesh(new THREE.BoxGeometry(w + 0.32, 0.08, 3.48), roofGlowMat);
+  roofGlow.position.y = h + 0.41;
+  g.add(roofGlow);
   // rooftop AC units
   const acMat = new THREE.MeshStandardMaterial({ color: 0x9aa3a8, roughness: 0.7, metalness: 0.3 });
   const acGeo = new THREE.BoxGeometry(0.7, 0.4, 0.7);
@@ -628,6 +664,16 @@ function makeBuilding(name: string, kind: number): THREE.Group {
     pillar.position.set(s * w * 0.2, 0.75, 1.75);
     g.add(pillar);
   }
+  const entranceMat = new THREE.MeshStandardMaterial({ color: 0x2f5972, metalness: 0.48, roughness: 0.24, emissive: 0x102a3b, emissiveIntensity: 0.45 });
+  const doorGeo = new THREE.BoxGeometry(0.72, 1.4, 0.07);
+  for (const x of [-0.38, 0.38]) {
+    const door = new THREE.Mesh(doorGeo, entranceMat);
+    door.position.set(x, 0.72, 1.63);
+    g.add(door);
+  }
+  const doorBar = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.48, 0.11), trimMat);
+  doorBar.position.set(0, 0.73, 1.66);
+  g.add(doorBar);
 
   // name boards — bigger + higher-res so they stay readable from far on mobile
   const boardTex = textTexture(name, { bg: "#0d3b4f", fg: "#8ef5c9", w: 1536 });
@@ -693,6 +739,16 @@ function makeShop(): THREE.Group {
   g.add(door);
   g.visible = false;
   return g;
+}
+
+function makeModelBadge(text: string): THREE.Mesh {
+  const tex = textTexture(text, { bg: "#0d3b4f", fg: "#8ef5c9", w: 1024 });
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.8, 0.72),
+    new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }),
+  );
+  mesh.position.set(0, 2.45, 1.52);
+  return mesh;
 }
 
 function gateBannerTexture(name: string, fg: string): THREE.CanvasTexture {
@@ -783,6 +839,8 @@ export class Campus {
   private fencePool: THREE.Group[] = [];
   private carPool: THREE.Group[] = [];
   private buildingPool: THREE.Group[] = [];
+  private kenneyBuildingPool: THREE.Group[] = [];
+  private kenneyDetailPool: THREE.Group[] = [];
   private shopPool: THREE.Group[] = [];
   private archPool: THREE.Group[] = [];
   private lowPool: { mesh: THREE.Group; w: number; d: number; h: number }[] = [];
@@ -868,6 +926,7 @@ export class Campus {
     for (let i = 0; i < 12; i++) this.carPool.push(this.addProp(makeParkedCar()));
     for (let i = 0; i < 12; i++) this.buildingPool.push(this.addProp(makeBuilding(BUILDING_NAMES[i % 4], i % 3)));
     for (let i = 0; i < 7; i++) this.shopPool.push(this.addProp(makeShop()));
+    this.loadKenneyCityKit();
     // road decorations (manhole covers / pothole patches) — pure visuals
     for (let i = 0; i < 10; i++) this.decoPool.push(this.addProp(makeRoadDeco(i % 2 === 0)));
     // separate gates: GANDU COLLEGE at the start, MADARCHOD COLLEGE mid-run
@@ -936,6 +995,65 @@ export class Campus {
     return mesh as THREE.Group;
   }
 
+  private loadKenneyCityKit() {
+    const loader = new GLTFLoader();
+    const base = "/models/kenney-city-suburban/";
+    const load = (file: string) =>
+      new Promise<THREE.Group>((resolve, reject) => {
+        loader.load(
+          base + file,
+          (gltf) => resolve(gltf.scene),
+          undefined,
+          reject,
+        );
+      });
+
+    Promise.all(KENNEY_CITY_ASSETS.map(load))
+      .then((templates) => {
+        for (let i = 0; i < 18; i++) {
+          const root = new THREE.Group();
+          const model = templates[i % templates.length].clone(true);
+          model.scale.setScalar(1.35);
+          model.rotation.y = Math.PI / 2;
+          model.position.set(0, 0, 0);
+          model.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              o.castShadow = true;
+              o.receiveShadow = true;
+            }
+          });
+          const badge = makeModelBadge(BUILDING_NAMES[i % BUILDING_NAMES.length]);
+          badge.position.x = 0;
+          badge.rotation.y = 0;
+          root.add(model, badge);
+          root.visible = false;
+          this.kenneyBuildingPool.push(this.addProp(root));
+        }
+      })
+      .catch(() => {
+        // Procedural campus stays active when external assets are unavailable.
+      });
+
+    Promise.all(KENNEY_DETAIL_ASSETS.map(load))
+      .then((templates) => {
+        for (let i = 0; i < 24; i++) {
+          const root = templates[i % templates.length].clone(true);
+          root.scale.setScalar(i % 6 < 2 ? 1.35 : 1.15);
+          root.traverse((o) => {
+            if ((o as THREE.Mesh).isMesh) {
+              o.castShadow = true;
+              o.receiveShadow = true;
+            }
+          });
+          root.visible = false;
+          this.kenneyDetailPool.push(this.addProp(root));
+        }
+      })
+      .catch(() => {
+        // Decorative fallback pools already cover trees, fences and planters.
+      });
+  }
+
   private rng() {
     // deterministic-ish but varied
     this.rngState = (this.rngState * 1103515245 + 12345) & 0x7fffffff;
@@ -1001,6 +1119,40 @@ export class Campus {
     }
   }
 
+  private placeKenneyBuilding(side: -1 | 1, z: number) {
+    for (const m of this.kenneyBuildingPool) {
+      if (!m.visible) {
+        m.visible = true;
+        const x = side * (11 + this.rng() * 5);
+        m.position.set(x, 0, z);
+        m.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
+        const p = this.props.find((pr) => pr.mesh === m)!;
+        p.x = x;
+        p.z = z;
+        p.active = true;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private placeKenneyDetail(side: -1 | 1, z: number) {
+    for (const m of this.kenneyDetailPool) {
+      if (!m.visible) {
+        m.visible = true;
+        const x = side * (6.2 + this.rng() * 4.4);
+        m.position.set(x, 0, z);
+        m.rotation.y = this.rng() * Math.PI * 2;
+        const p = this.props.find((pr) => pr.mesh === m)!;
+        p.x = x;
+        p.z = z;
+        p.active = true;
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Spawn one chunk of campus between z and z+CHUNK. */
   private spawnChunk(z0: number) {
     const sideA = this.rng() < 0.5 ? -1 : 1;
@@ -1016,6 +1168,7 @@ export class Campus {
       else if (r < 0.8) this.placeProp(this.benchPool, sideB, z);
       else if (r < 0.9) this.placeCar(z, sideB);
       else this.placeProp(this.flowerPool, sideB, z + 1.5);
+      if (this.rng() < 0.22) this.placeKenneyDetail(sideB, z + 1.4);
       if (this.rng() < 0.28) this.placeProp(this.bushPool, sideB, z + 3);
     }
     // fence stretch along the road edge
@@ -1025,8 +1178,9 @@ export class Campus {
     }
     // a building every chunk (faces the road so its TIT board shows)
     if (this.rng() < 0.8) {
-      const b = this.buildingPool.find((m) => !m.visible);
-      if (b) {
+      if (!this.placeKenneyBuilding(sideA, z0 + 10)) {
+        const b = this.buildingPool.find((m) => !m.visible);
+        if (b) {
         b.visible = true;
         b.rotation.y = 0;
         const x = sideA * (12 + this.rng() * 5);
@@ -1035,6 +1189,7 @@ export class Campus {
         p.x = x;
         p.z = z0 + 10;
         p.active = true;
+        }
       }
     }
     // a shop facade every few chunks
