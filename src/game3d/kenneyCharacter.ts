@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
-import { BONES, CLIPS, type AnimState, type BoneName } from "./animations";
-import { buildKenneyPoseClips, kenneyPoseDebug, kenneyPoseScaffold } from "./kenneyClips";
+import { CLIPS, type AnimState } from "./animations";
+import { buildKenneyPoseClips, measureKenneyRest } from "./kenneyClips";
 
 /**
  * Kenney "Animated Characters 1" (CC0 — kenney.nl) — rigged low-poly survivor
@@ -9,12 +9,18 @@ import { buildKenneyPoseClips, kenneyPoseDebug, kenneyPoseScaffold } from "./ken
  *
  * Kenney ships 3 animation files for this skeleton, but only the idle is a
  * real animation (the run/jump files contain single static poses), so the
- * idle is used as-is and every gameplay state is RE-TARGETED from the game's
- * existing procedural clips: each keyframe's world-space bone rotation is
- * computed on the old rig and written back into the Kenney skeleton's local
- * space. The imported character therefore moves exactly like the character
- * it replaces. Root motion is stripped (the game owns all movement) and the
- * vertical bob is preserved through a "body" wrapper group.
+ * idle is used as-is and every gameplay state is AUTHORED DIRECTLY ON THIS
+ * SKELETON: the rest geometry (world rotations, joint offsets, segment
+ * lengths) is measured once from the loaded skeleton and every keyframe is
+ * solved with two-bone IK in the skeleton's own frame, written back as local
+ * quaternions for the real bone names (see kenneyClips.ts). No intermediate
+ * rig, no retargeting, no mirror/scale hacks — the bones are the ones the
+ * mesh is actually weighted to (LeftShoulder swings the arm, LeftArm bends
+ * the elbow, …), so the arms swing from the shoulder and the elbows/knees
+ * bend where the mesh deforms.
+ *
+ * Root motion is stripped (the game owns all movement) and the vertical bob
+ * is preserved through a "body" wrapper group.
  */
 
 const BASE = import.meta.env.BASE_URL;
@@ -90,171 +96,20 @@ function bobTrackFor(src: THREE.VectorKeyframeTrack, duration: number): THREE.Ve
   return new THREE.VectorKeyframeTrack("body.position", times, src.values.slice());
 }
 
-function findBone(skel: THREE.Skeleton, candidates: string[]): THREE.Bone | null {
-  const lower = candidates.map((c) => c.toLowerCase());
-  return skel.bones.find((b) => lower.includes(b.name.toLowerCase())) ?? null;
-}
-
-const BONE_CANDIDATES: Record<BoneName, string[]> = {
-  hips: ["Hips", "hips", "Pelvis", "pelvis"],
-  spine: ["Spine", "spine"],
-  chest: ["Chest", "chest", "Spine2", "spine2", "Spine1", "spine1"],
-  neck: ["Neck", "neck"],
-  head: ["Head", "head"],
-  upperArmL: ["LeftArm", "LeftUpperArm", "LeftUpArm", "leftarm"],
-  upperArmR: ["RightArm", "RightUpperArm", "RightUpArm", "rightarm"],
-  forearmL: ["LeftForeArm", "LeftLowerArm", "leftforearm"],
-  forearmR: ["RightForeArm", "RightLowerArm", "rightforearm"],
-  handL: ["LeftHand", "lefthand"],
-  handR: ["RightHand", "righthand"],
-  thighL: ["LeftUpLeg", "LeftThigh", "LeftUpperLeg", "leftupleg"],
-  thighR: ["RightUpLeg", "RightThigh", "RightUpperLeg", "rightupleg"],
-  shinL: ["LeftLeg", "LeftShin", "LeftLowerLeg", "leftleg"],
-  shinR: ["RightLeg", "RightShin", "RightLowerLeg", "rightleg"],
-  footL: ["LeftFoot", "leftfoot"],
-  footR: ["RightFoot", "rightfoot"],
-};
-
-interface RetargetNode {
-  myObj: THREE.Object3D | null; // matching bone group on the OLD rig (null = kenney root)
-  kBone: THREE.Bone;
-  parent: RetargetNode | null;
-  children: RetargetNode[];
-}
-
-/**
- * Re-author one of the game's procedural clips onto the Kenney skeleton.
- * For every keyframe the source rig's bone world rotations are computed by
- * forward kinematics; each Kenney bone's local quaternion is then derived as
- * parentWorld⁻¹ × targetWorld so the Kenney character poses identically.
- */
-function retargetClip(
-  src: THREE.AnimationClip,
-  myRoot: THREE.Group,
-  rootNode: RetargetNode,
-): THREE.AnimationClip {
-
-  const timesSet = new Set<number>();
-  for (const tr of src.tracks) {
-    if (tr instanceof THREE.QuaternionKeyframeTrack) for (const t of tr.times) timesSet.add(t);
+/** Tolerant bone lookup: exact name, then |/:: tail segment, then case-insensitive. */
+function findBone(skel: THREE.Skeleton, name: string): THREE.Bone | null {
+  let b = skel.bones.find((x) => x.name === name) ?? null;
+  if (!b) {
+    const tail = name.split("|").pop()!.split("::").pop()!;
+    b = skel.bones.find(
+      (x) => x.name.endsWith(`|${name}`) || x.name.endsWith(`::${name}`) || x.name === tail,
+    ) ?? null;
   }
-  const times = [...timesSet].sort((a, b) => a - b);
-
-  const nodeList: RetargetNode[] = [];
-  (function collect(n: RetargetNode) {
-    nodeList.push(n);
-    for (const c of n.children) collect(c);
-  })(rootNode);
-
-  const values = new Map<RetargetNode, number[]>();
-  for (const n of nodeList) values.set(n, []);
-
-  // End bones (feet, hands, head — nothing in the mapped chain hangs off
-  // them) must KEEP the Kenney rest orientation: this rig bakes a 180°-ish
-  // Z twist into the feet (so the toes point down) and a ~90° Y twist into
-  // the left hand. Overwriting those with an identity-derived quaternion is
-  // what flipped the toes up and twisted the wrist. They only get the
-  // scaffold's authored local delta (foot pitch, head tilt) applied on top
-  // of their rest pose.
-  const endBones = new Set(nodeList.filter((n) => n.children.length === 0));
-
-  const mixer = new THREE.AnimationMixer(myRoot);
-  const action = mixer.clipAction(src);
-  action.play();
-
-  // The Kenney deform bones store their child joints along their LOCAL +Y
-  // axis (LeftLeg sits at (0, 0.53, 0) in LeftUpLeg's frame) and their local
-  // POSITIONS do not match the world segment geometry (the FBX was exported
-  // in a different internal space and reconciled by scale), so multiplying a
-  // rest-world quaternion by a local offset does NOT reproduce the child
-  // direction. Instead, each bone gets the rotation that maps its local child
-  // axis onto the source rig's rest segment axis — the child joints then land
-  // exactly where the source rig's children do, and end bones (feet/hands)
-  // simply inherit the source rig's orientation.
-  const boneQ = new Map<RetargetNode, THREE.Quaternion>();
-  for (const n of nodeList) {
-    if (!n.myObj) continue;
-    // The child's position lives IN THIS BONE'S LOCAL FRAME (it is a direct
-    // child), so it is the local child axis directly.
-    // Multi-child joints (hips has LeftUpLeg/RightUpLeg/Spine, chest has the
-    // shoulders) expose side branches too — pick the child whose local
-    // direction best matches the scaffold's segment so the chain direction
-    // (hips→spine, chest→neck) is what gets aligned, never a limb.
-    const kChildren = n.kBone.children.filter((c) => (c as THREE.Bone).isBone) as THREE.Bone[];
-    const myChild = n.myObj.children.find((c) => c !== undefined && c !== null) as THREE.Object3D | undefined;
-    if (!kChildren.length || !myChild) {
-      // end bone (foot/hand/head): handled by the rest-preserving branch below
-      boneQ.set(n, new THREE.Quaternion());
-      continue;
-    }
-    const myAxis = new THREE.Vector3().copy(myChild.position).normalize();
-    let best = kChildren[0];
-    let bestDot = -2;
-    for (const c of kChildren) {
-      const d = new THREE.Vector3().copy(c.position).normalize();
-      const dot = d.dot(myAxis);
-      if (dot > bestDot) { bestDot = dot; best = c; }
-    }
-    const kDir = new THREE.Vector3().copy(best.position).normalize();
-    boneQ.set(n, new THREE.Quaternion().setFromUnitVectors(kDir, myAxis));
+  if (!b) {
+    const lower = name.toLowerCase();
+    b = skel.bones.find((x) => x.name.toLowerCase() === lower) ?? null;
   }
-
-  const tmp = new THREE.Quaternion();
-  const tmp2 = new THREE.Quaternion();
-  const target = new THREE.Quaternion();
-  const kWorld = new Map<RetargetNode, THREE.Quaternion>();
-
-  for (const t of times) {
-    mixer.setTime(t);
-    myRoot.updateMatrixWorld(true);
-    kWorld.clear();
-    for (const n of nodeList) {
-      let local: THREE.Quaternion;
-      if (n.myObj === null) {
-        if (n.parent === null) {
-          // skeleton root — its ACTUAL world rotation is the FK base (it sits
-          // under the model's upright transform, not under an animated bone)
-          n.kBone.getWorldQuaternion(tmp);
-          local = tmp.clone();
-        } else {
-          // intermediate control bone — stays at its local rest pose
-          local = n.kBone.quaternion;
-        }
-      } else if (endBones.has(n)) {
-        // end bone: rest orientation × the scaffold's authored local delta
-        // (foot pitch / head tilt). Preserving the rest is what keeps the
-        // toes pointing down and the hands untwisted.
-        local = tmp2.copy(n.kBone.quaternion).multiply(n.myObj.quaternion);
-      } else {
-        n.myObj.getWorldQuaternion(target); // source rig's world rotation
-        target.multiply(boneQ.get(n) ?? new THREE.Quaternion()); // + child-axis correction
-        const pw = kWorld.get(n.parent!)!;
-        local = tmp.copy(pw).invert().multiply(target);
-      }
-      const arr = values.get(n)!;
-      arr.push(local.x, local.y, local.z, local.w);
-      const pw = n.parent ? kWorld.get(n.parent)! : null;
-      kWorld.set(n, pw ? pw.clone().multiply(local) : local.clone());
-    }
-  }
-  mixer.stopAllAction();
-
-  // Write a track for EVERY mapped bone — including bones the source clip
-  // leaves unkeyed (e.g. the spine in jump/fall/slide). Those bones carry big
-  // rest rotations in this rig, so leaving them unkeyed would make them swing
-  // on top of the retargeted pose and collapse the torso. The FK pass above
-  // already derived the correct local quaternion for them (identity-relative).
-  const tracks: THREE.KeyframeTrack[] = [];
-  for (const n of nodeList) {
-    if (!n.myObj) continue;
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${n.kBone.name}.quaternion`, times, values.get(n)!));
-  }
-  const pos = src.tracks.find((t) => t.name === "body.position");
-  if (pos) tracks.push(pos.clone());
-
-  const clip = new THREE.AnimationClip(src.name, src.duration, tracks);
-  clip.duration = src.duration;
-  return clip;
+  return b;
 }
 
 // ------------------------------------------------------------------ build
@@ -276,7 +131,7 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
   if (!skinned) throw new Error("Kenney characterMedium.fbx has no skinned mesh");
   const skeleton = skinned.skeleton;
 
-  // ---- apply the CC0 skin texture ---------------------------------------
+  // ---- apply the CC0 skin texture ----------------------------------------
   const mats = Array.isArray(skinned.material) ? skinned.material : [skinned.material];
   for (const m of mats) {
     const mat = m as THREE.MeshPhongMaterial;
@@ -291,86 +146,19 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
     if (o.name.toLowerCase() === "body") o.name = `${o.name}_mesh`;
   });
 
-  // ---- map old-rig bone names → Kenney bone names -------------------------
-  const boneMap = new Map<BoneName, THREE.Bone>();
-  for (const b of BONES) {
-    const k = findBone(skeleton, BONE_CANDIDATES[b]);
-    if (k) boneMap.set(b, k);
-  }
-  if (boneMap.size < BONES.length) {
-    const missing = BONES.filter((b) => !boneMap.has(b));
-    throw new Error(
-      `Kenney skeleton missing bones: ${missing.join(", ")} — have: ${skeleton.bones.map((b) => b.name).join(", ")}`,
-    );
-  }
-
   // ---- stand the model upright (the FBX stores the character along +Z) ----
-  // Done BEFORE the retarget so the skeleton's world rotations used as the FK
-  // base include the upright transform (it is part of the final scene too).
+  // Done BEFORE measuring rest so the rest-world rotations include the
+  // upright transform (it is part of the final scene too).
   const box0 = new THREE.Box3().setFromObject(modelG);
   if (box0.max.z - box0.min.z > box0.max.y - box0.min.y) {
     modelG.rotation.x = -Math.PI / 2; // Z-up → Y-up
     modelG.updateMatrixWorld(true);
   }
 
-  // ---- retarget rig + FK base --------------------------------------------
-  // The pose scaffold mirrors the game rig's bone names with the Kenney
-  // model's real joint positions; the IK-authored clips play on it and the
-  // retarget samples its world rotations (see kenneyClips.ts).
-  const myRoot = kenneyPoseScaffold();
-  // The scaffold is built in the Kenney skeleton's own frame (left limb at
-  // +X, matching how the FBX stores LeftUpLeg/LeftArm), so the retarget below
-  // maps it onto the skeleton directly — no mirror/scale tricks needed.
-  myRoot.updateMatrixWorld(true);
-
-  // The Kenney rig has IK/FK control bones (HipsCtrl, LeftFootCtrl, …) above
-  // the deform bones — the skeleton root is the top-most bone that is an
-  // ancestor of the Hips deform bone.
-  const hipsBone = boneMap.get("hips")!;
-  let kRoot = hipsBone;
-  while (kRoot.parent && (kRoot.parent as THREE.Bone).isBone) kRoot = kRoot.parent as THREE.Bone;
-
-  // Build the retarget node tree over the REAL skeleton chain (kRoot → all
-  // mapped deform bones), keeping intermediate control bones (LeftShoulder,
-  // UpperChest, …) as unanimated nodes so the world-space math stays exact.
-  const boneToMyName = new Map<THREE.Bone, BoneName>();
-  for (const [myName, kB] of boneMap) boneToMyName.set(kB, myName);
-
-  const needed = new Set<THREE.Bone>([kRoot]);
-  for (const kB of boneMap.values()) {
-    let p: THREE.Bone | null = kB;
-    while (p && !needed.has(p)) {
-      needed.add(p);
-      p = p.parent as THREE.Bone | null;
-    }
-  }
-
-  const rootNode: RetargetNode = { myObj: null, kBone: kRoot, parent: null, children: [] };
-  const nodeOf = new Map<THREE.Bone, RetargetNode>([[kRoot, rootNode]]);
-  for (const b of needed) {
-    if (b === kRoot) continue;
-    const myName = boneToMyName.get(b);
-    const myObj = myName ? (myRoot.getObjectByName(myName) ?? null) : null;
-    if (myName && !myObj) throw new Error(`old rig missing bone group: ${myName}`);
-    nodeOf.set(b, { myObj, kBone: b, parent: null, children: [] });
-  }
-  for (const [b, node] of nodeOf) {
-    if (b === kRoot) continue;
-    const p = b.parent as THREE.Bone | null;
-    if (!p || !nodeOf.has(p)) throw new Error(`Kenney bone ${b.name} is not connected to the skeleton root`);
-    node.parent = nodeOf.get(p)!;
-    nodeOf.get(p)!.children.push(node);
-  }
-
-  // ---- retarget every gameplay state onto the Kenney skeleton ------------
-  // The source clips are IK-authored for the Kenney's real proportions so the
-  // feet stay planted near the road and the hands swing naturally (the old
-  // hand-authored clips made the longer Kenney limbs tuck up above the hips).
-  const kenneyPoses = buildKenneyPoseClips();
-  const retargeted = {} as Record<AnimState, THREE.AnimationClip>;
-  for (const state of ["run", "jump", "fall", "landing", "slide", "hit", "caught", "grab"] as const) {
-    retargeted[state] = retargetClip(kenneyPoses[state], myRoot, rootNode);
-  }
+  // ---- author the pose clips directly on the real skeleton ----------------
+  const getBone = (name: string): THREE.Bone | null => findBone(skeleton, name);
+  const rest = measureKenneyRest(getBone);
+  const kenneyPoses = buildKenneyPoseClips(rest);
 
   // ---- Kenney's own idle animation (the only real animation in the pack) --
   const idleG = await loader.loadAsync(`${DIR}idle.fbx`);
@@ -378,15 +166,17 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
   if (!idleClip) throw new Error("Kenney idle.fbx contains no animation clips");
   const kenneyIdle = renameClip(onlyRotations(filterToSkeleton(normalizeFbxNames(idleClip), skeleton)), "idle");
 
-  // The idle also drives FK control bones (HipsCtrl, UpperChest, LeftShoulder,
-  // fingers…). Those control bones are the REST base the retargeted clips are
-  // authored against, so the idle must leave them untouched — otherwise the
-  // run/jump/slide poses would rotate on top of a moving base and collapse.
-  // Keep only the deform bones the retarget also drives (the visible motion).
+  // The idle also drives FK control bones (HipsCtrl, UpperChest, fingers…).
+  // Those control bones are the REST base the pose clips are authored against,
+  // so the idle must leave them untouched — otherwise the run/jump/slide poses
+  // would rotate on top of a moving base and collapse. Keep only the bones the
+  // pose clips also drive (the visible motion).
   {
-    const deform = new Set([...boneMap.values()].map((b) => b.name));
-    deform.add("body");
-    kenneyIdle.tracks = kenneyIdle.tracks.filter((t) => deform.has(t.name.split(".")[0]));
+    const driven = new Set<string>(["body"]);
+    for (const state of Object.values(kenneyPoses)) {
+      for (const t of state.tracks) driven.add(t.name.split(".")[0]);
+    }
+    kenneyIdle.tracks = kenneyIdle.tracks.filter((t) => driven.has(t.name.split(".")[0]));
   }
   // preserve the game's vertical body bob (rescaled to the idle cycle)
   const idlePos = CLIPS.idle.tracks.find((t) => t.name === "body.position");
@@ -442,24 +232,23 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
 
   const clips: Record<AnimState, THREE.AnimationClip> = {
     idle: kenneyIdle,
-    run: retargeted.run,
-    jump: retargeted.jump,
-    fall: retargeted.fall,
-    landing: retargeted.landing,
-    slide: retargeted.slide,
-    hit: retargeted.hit,
-    caught: retargeted.caught,
-    grab: retargeted.grab,
+    run: kenneyPoses.run,
+    jump: kenneyPoses.jump,
+    fall: kenneyPoses.fall,
+    landing: kenneyPoses.landing,
+    slide: kenneyPoses.slide,
+    hit: kenneyPoses.hit,
+    caught: kenneyPoses.caught,
+    grab: kenneyPoses.grab,
   };
 
-  // retargeted clips keep the game's native 0.55s run cadence
+  // authored clips keep the game's native 0.55s run cadence
   const runCadence = 1;
 
   if (import.meta.env.DEV) {
-    (window as unknown as { __poseDebug?: unknown }).__poseDebug = kenneyPoseDebug;
     (window as unknown as { __kenney?: unknown }).__kenney = {
       bones: skeleton.bones.map((b) => b.name),
-      map: [...boneMap].map(([k, v]) => [k, v.name]),
+      parents: skeleton.bones.map((b) => [b.name, b.parent ? b.parent.name : ""]),
       clips: Object.fromEntries(
         Object.entries(clips).map(([k, c]) => [
           k,

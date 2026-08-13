@@ -1,43 +1,30 @@
 import * as THREE from "three";
-import type { AnimState, BoneName } from "./animations";
+import type { AnimState } from "./animations";
 
 /**
  * Kenney-native animation clips for the player character.
  *
- * The imported Kenney model (see kenneyCharacter.ts) has human proportions —
- * longer limbs than the chunky procedural rig the game's hand-authored clips
- * were built for. Retargeting those clips bone-for-bone made the feet tuck up
- * above the hips during the run (identical world rotations + longer limbs =
- * feet swinging way too high).
+ * The imported Kenney model (see kenneyCharacter.ts) has its own rig with real
+ * rest orientations, real joint offsets and a non-uniform internal scale. The
+ * earlier approach retargeted hand-authored clips through a fake "scaffold"
+ * rig, which needed mirror hacks and broke as soon as a bone carried a large
+ * rest rotation (the shoulder) — the arm never swung from the shoulder and
+ * the elbow flipped around.
  *
- * Instead of retargeting, this module AUTHORES new clips with inverse
- * kinematics: every keyframe defines where each foot and hand should be in
- * space (relative to the hips/chest), and a two-bone IK solve places the
- * knee/elbow using the Kenney model's real segment lengths. The result is a
- * natural stride — feet planted near the road at contact, hands swinging at
- * chest height — while the torso/head lean comes from the same style of
- * authored eulers the rest of the game uses.
+ * This module instead AUTHORES the clips DIRECTLY on the Kenney skeleton:
+ * the rest geometry (world rotations, child directions, world-space segment
+ * lengths) is measured from the loaded skeleton once, then every keyframe is
+ * solved with two-bone IK in the skeleton's own frame and written back as
+ * local quaternions for the real bone names. No scaffold, no retarget, no
+ * mirroring beyond the authored pose data (the pose keys are written in the
+ * old rig's convention, left = −X; the Kenney frame is left = +X, so targets
+ * get their X mirrored and yaw/roll eulers get negated here).
  *
- * The output clips are written in the game's OLD rig convention (bone names
- * like "thighL", local-space quaternion tracks, plus a "body.position" bob
- * track) and are fed through the existing retarget pass so the Kenney
- * skeleton plays them natively.
- *
- * Character space used here: up = +Y, face/forward = +Z, left foot at −X.
- * This matches the old rig's local frame (the game rotates the whole
- * character by π when placing it).
+ * Pose-key space used below: up = +Y, face/forward = +Z, left foot at −X.
  */
 
 type V3 = [number, number, number];
 type Euler = [number, number, number];
-
-/** Kenney model segment lengths (measured from the FBX skeleton at rest). */
-const LEN = {
-  thigh: 0.34,
-  shin: 0.33,
-  upperArm: 0.3,
-  foreArm: 0.35,
-};
 
 interface TorsoPose {
   hips?: Euler;
@@ -48,13 +35,13 @@ interface TorsoPose {
 }
 
 interface LimbsKey {
-  /** World-space foot targets (relative to body origin, before torso lean). */
+  /** World-space ankle targets (relative to the body origin, before lean). */
   footL: V3;
   footR: V3;
   /** Toe pitch (radians) — positive dips the toes down toward the road. */
   footRxL?: number;
   footRxR?: number;
-  /** World-space hand targets (relative to body origin, before torso lean). */
+  /** World-space WRIST targets (the hand bone hangs beyond the wrist). */
   handL: V3;
   handR: V3;
 }
@@ -76,7 +63,7 @@ const RUN: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.3, -0.35], footRxL: -0.12, // behind, heel lifting
       footR: [0.13, 0.05, 0.35], footRxR: 0.2, // forward, planting
-      handL: [-0.3, 1.15, 0.3], handR: [0.3, 1.1, -0.3],
+      handL: [-0.27, 1.36, 0.28], handR: [0.27, 1.36, -0.28],
     },
     bob: 0,
   },
@@ -86,7 +73,7 @@ const RUN: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.35, 0.0], footRxL: -0.05, // swinging under the body
       footR: [0.13, 0.05, 0.12], footRxR: 0.05, // stance, pushing
-      handL: [-0.3, 1.1, -0.25], handR: [0.3, 1.15, 0.25],
+      handL: [-0.27, 1.37, 0.0], handR: [0.27, 1.37, 0.0],
     },
     bob: 0.04,
   },
@@ -96,7 +83,7 @@ const RUN: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.05, 0.35], footRxL: 0.2, // forward, planting
       footR: [0.13, 0.3, -0.35], footRxR: -0.12, // behind, lifting
-      handL: [-0.3, 1.1, -0.3], handR: [0.3, 1.15, 0.3],
+      handL: [-0.27, 1.36, -0.28], handR: [0.27, 1.36, 0.28],
     },
     bob: 0,
   },
@@ -106,7 +93,7 @@ const RUN: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.05, 0.12], footRxL: 0.05, // stance
       footR: [0.13, 0.35, 0.0], footRxR: -0.05, // swinging
-      handL: [-0.3, 1.15, 0.25], handR: [0.3, 1.1, -0.25],
+      handL: [-0.27, 1.37, 0.0], handR: [0.27, 1.37, 0.0],
     },
     bob: 0.04,
   },
@@ -142,7 +129,7 @@ const FALL: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.2, 0.4], footRxL: -0.2, // reaching forward-down
       footR: [0.13, 0.2, 0.4], footRxR: -0.2,
-      handL: [-0.5, 1.35, 0.1], handR: [0.5, 1.35, 0.1],
+      handL: [-0.45, 1.35, 0.1], handR: [0.45, 1.35, 0.1],
     },
     bob: 0.02,
   },
@@ -152,7 +139,7 @@ const FALL: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.18, 0.45], footRxL: -0.25,
       footR: [0.13, 0.18, 0.45], footRxR: -0.25,
-      handL: [-0.55, 1.3, 0.15], handR: [0.55, 1.3, 0.15],
+      handL: [-0.5, 1.3, 0.15], handR: [0.5, 1.3, 0.15],
     },
     bob: 0.01,
   },
@@ -165,7 +152,7 @@ const LANDING: PoseKey[] = [
     limbs: {
       footL: [-0.15, 0.05, -0.1], footRxL: 0.15,
       footR: [0.15, 0.05, -0.1], footRxR: 0.15,
-      handL: [-0.3, 1.2, 0.2], handR: [0.3, 1.2, 0.2],
+      handL: [-0.3, 1.25, 0.15], handR: [0.3, 1.25, 0.15],
     },
     bob: 0,
   },
@@ -175,7 +162,7 @@ const LANDING: PoseKey[] = [
     limbs: {
       footL: [-0.15, 0.05, -0.05], footRxL: 0.1,
       footR: [0.15, 0.05, -0.05], footRxR: 0.1,
-      handL: [-0.3, 1.05, 0.15], handR: [0.3, 1.05, 0.15],
+      handL: [-0.3, 1.15, 0.1], handR: [0.3, 1.15, 0.1],
     },
     bob: -0.16, // deep knee-bend absorbing the impact
   },
@@ -198,7 +185,7 @@ const SLIDE: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.1, 0.55], footRxL: 0.25, // legs stretched forward, low
       footR: [0.13, 0.1, 0.55], footRxR: 0.25,
-      handL: [-0.3, 0.85, -0.45], handR: [0.3, 0.85, -0.45],
+      handL: [-0.28, 1.32, -0.28], handR: [0.28, 1.32, -0.28],
     },
     bob: -0.18,
   },
@@ -208,7 +195,7 @@ const SLIDE: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.12, 0.5], footRxL: 0.2,
       footR: [0.13, 0.12, 0.5], footRxR: 0.2,
-      handL: [-0.3, 0.9, -0.4], handR: [0.3, 0.9, -0.4],
+      handL: [-0.28, 1.34, -0.24], handR: [0.28, 1.34, -0.24],
     },
     bob: -0.16,
   },
@@ -221,7 +208,7 @@ const HIT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.08, -0.1], footRxL: 0.1,
       footR: [0.13, 0.08, -0.1], footRxR: 0.1,
-      handL: [-0.3, 1.15, 0], handR: [0.3, 1.15, 0],
+      handL: [-0.3, 1.25, 0.0], handR: [0.3, 1.25, 0.0],
     },
     bob: 0,
   },
@@ -231,7 +218,7 @@ const HIT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.08, -0.15], footRxL: 0.1,
       footR: [0.13, 0.08, -0.15], footRxR: 0.1,
-      handL: [-0.4, 1.45, 0.15], handR: [0.3, 0.95, -0.25],
+      handL: [-0.4, 1.45, 0.15], handR: [0.3, 1.25, -0.2],
     },
     bob: 0.02,
   },
@@ -241,7 +228,7 @@ const HIT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.08, -0.12], footRxL: 0.1,
       footR: [0.13, 0.08, -0.12], footRxR: 0.1,
-      handL: [0.3, 1.0, -0.2], handR: [-0.4, 1.4, 0.1],
+      handL: [0.3, 1.25, -0.15], handR: [-0.4, 1.4, 0.1],
     },
     bob: -0.03,
   },
@@ -251,7 +238,7 @@ const HIT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.08, -0.08], footRxL: 0.1,
       footR: [0.13, 0.08, -0.08], footRxR: 0.1,
-      handL: [-0.3, 1.15, 0], handR: [0.3, 1.15, 0],
+      handL: [-0.3, 1.25, 0.0], handR: [0.3, 1.25, 0.0],
     },
     bob: 0.01,
   },
@@ -264,7 +251,7 @@ const CAUGHT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.1, -0.08], footRxL: 0.1,
       footR: [0.13, 0.1, -0.08], footRxR: 0.1,
-      handL: [-0.3, 0.7, 0.35], handR: [0.3, 0.7, 0.35], // braced forward-down
+      handL: [-0.3, 1.2, 0.2], handR: [0.3, 1.2, 0.2], // braced forward-down
     },
     bob: -0.1,
   },
@@ -274,7 +261,7 @@ const CAUGHT: PoseKey[] = [
     limbs: {
       footL: [-0.13, 0.1, -0.06], footRxL: 0.1,
       footR: [0.13, 0.1, -0.06], footRxR: 0.1,
-      handL: [-0.3, 0.72, 0.32], handR: [0.3, 0.72, 0.32],
+      handL: [-0.3, 1.22, 0.18], handR: [0.3, 1.22, 0.18],
     },
     bob: -0.12,
   },
@@ -287,7 +274,7 @@ const GRAB: PoseKey[] = [
     limbs: {
       footL: [-0.15, 0.1, -0.2], footRxL: 0.1,
       footR: [0.15, 0.1, -0.2], footRxR: 0.1,
-      handL: [-0.3, 1.05, 0.5], handR: [0.3, 1.05, 0.5], // reaching forward
+      handL: [-0.28, 1.3, 0.25], handR: [0.28, 1.3, 0.25], // reaching forward
     },
     bob: -0.02,
   },
@@ -297,7 +284,7 @@ const GRAB: PoseKey[] = [
     limbs: {
       footL: [-0.15, 0.1, -0.18], footRxL: 0.1,
       footR: [0.15, 0.1, -0.18], footRxR: 0.1,
-      handL: [-0.3, 1.08, 0.48], handR: [0.3, 1.08, 0.48],
+      handL: [-0.28, 1.32, 0.22], handR: [0.28, 1.32, 0.22],
     },
     bob: -0.03,
   },
@@ -314,78 +301,12 @@ const SOURCES: Record<Exclude<AnimState, "idle">, PoseKey[]> = {
   grab: GRAB,
 };
 
-// ---------------------------------------------------------------- scaffold
-
-interface Scaffold {
-  group: THREE.Group;
-  bones: Record<BoneName, THREE.Group>;
-}
-
-/**
- * A plain object hierarchy mirroring the game rig's bone names with the
- * Kenney model's real joint positions (hips 0.8m, thigh 0.34m, …). Rest
- * rotations are identity — exactly like the old rig — so a clip authored in
- * this space plays back through the existing retarget pass unchanged.
- */
-function buildScaffold(): Scaffold {
-  const group = new THREE.Group();
-  const body = new THREE.Group();
-  body.name = "body";
-  group.add(body);
-
-  const mk = (parent: THREE.Object3D, name: string, x: number, y: number, z: number): THREE.Group => {
-    const g = new THREE.Group();
-    g.name = name;
-    g.position.set(x, y, z);
-    parent.add(g);
-    return g;
-  };
-
-  const hips = mk(body, "hips", 0, 0.8, 0);
-  const spine = mk(hips, "spine", 0, 0.21, 0);
-  const chest = mk(spine, "chest", 0, 0.19, 0);
-  const neck = mk(chest, "neck", 0, 0.37, 0);
-  const head = mk(neck, "head", 0, 0.17, 0);
-
-  // Segment offsets mirror the Kenney model's REST WORLD child directions
-  // (elbows/hands hang down-out, legs hang down). The IK solve below swings
-  // each bone from ITS OWN rest axis, so a pose always reads as a rotation
-  // relative to the character's natural stance.
-  // NOTE: this scaffold is built in the KENNEY convention (left limb at +X,
-  // forward = +Z, up = +Y) — it is the pose the retarget reproduces on the
-  // real skeleton, so its frame must match the skeleton's frame (the FBX
-  // stores LeftUpLeg at +X relative to Hips). The pose keys below are
-  // authored in the old rig's convention (left = −X); applyKey mirrors the
-  // limb targets and the yaw/roll eulers when solving, so the emitted local
-  // quats come out in this +X-left frame with no scale tricks involved.
-  const upperArmL = mk(chest, "upperArmL", 0.21, 0.32, -0.08);
-  const forearmL = mk(upperArmL, "forearmL", 0.12, -0.26, 0.1);
-  const handL = mk(forearmL, "handL", 0.09, -0.31, -0.14);
-  const upperArmR = mk(chest, "upperArmR", -0.21, 0.32, -0.08);
-  const forearmR = mk(upperArmR, "forearmR", -0.12, -0.26, 0.1);
-  const handR = mk(forearmR, "handR", -0.09, -0.31, -0.14);
-
-  const thighL = mk(hips, "thighL", 0.13, 0.04, -0.02);
-  const shinL = mk(thighL, "shinL", 0.05, -0.34, -0.05);
-  const footL = mk(shinL, "footL", -0.05, -0.33, 0.21);
-  const thighR = mk(hips, "thighR", -0.13, 0.04, -0.02);
-  const shinR = mk(thighR, "shinR", -0.05, -0.34, -0.05);
-  const footR = mk(shinR, "footR", 0.05, -0.33, 0.21);
-
-  const bones: Record<BoneName, THREE.Group> = {
-    hips, spine, chest, neck, head,
-    upperArmL, upperArmR, forearmL, forearmR, handL, handR,
-    thighL, thighR, shinL, shinR, footL, footR,
-  };
-  return { group, bones };
-}
-
 // -------------------------------------------------------------------- IK
 
 /**
  * Two-bone IK: given the joint origin, a world-space target and the two
  * segment lengths, returns unit directions for both segments. `bendDir`
- * selects which side of the hip-shoulder→target line the middle joint goes
+ * selects which side of the origin→target line the middle joint goes
  * (knees point forward, elbows point backward).
  */
 function twoBoneIK(
@@ -413,185 +334,253 @@ function twoBoneIK(
   return { dirA, dirB };
 }
 
+// ------------------------------------------------------------ skeleton rest
+
 /**
- * Unit direction of a scaffold bone's own rest segment (toward its child).
- * The child's position is stored IN THE BONE'S LOCAL FRAME (the child is a
- * direct child of the bone), so it is the segment axis directly.
+ * Rest measurements taken from the REAL skeleton so the IK solves against the
+ * exact geometry the mesh is skinned to.
  */
-function restAxisOf(_bone: THREE.Group, child: THREE.Group): THREE.Vector3 {
-  return new THREE.Vector3().copy(child.position).normalize();
+export interface KenneyRestData {
+  /** Animated chain: Hips, Spine, Chest, Neck, Head (+ UpperChest as a rest child of Chest). */
+  torso: Record<"Hips" | "Spine" | "Chest" | "Neck" | "Head" | "UpperChest" | "HipsCtrl", RestBone>;
+  /** IK chains: Left/Right Shoulder→Arm→ForeArm, Left/Right UpLeg→Leg→Foot.
+   *  The mid bones carry childDir/segLen; the end bones (foreL/foreR/footL/
+   *  footR) are plain rest bones the IK targets and pitches. */
+  chains: Record<
+    "shoulderL" | "armL" | "shoulderR" | "armR" | "thighL" | "shinL" | "thighR" | "shinR",
+    ChainBone
+  > & Record<"foreL" | "foreR" | "footL" | "footR", RestBone>;
+}
+
+export interface RestBone {
+  restWorld: THREE.Quaternion;
+  restLocal: THREE.Quaternion;
+  restPos: THREE.Vector3;
+  /** Name of this bone's actual parent in the skeleton ("" for the root). */
+  parentName: string;
+}
+
+export interface ChainBone extends RestBone {
+  /** Rest world direction toward the next joint (unit). */
+  childDir: THREE.Vector3;
+  /** World-space segment length to the next joint. */
+  segLen: number;
+}
+
+/** Extract the rest measurements from the loaded skeleton. */
+export function measureKenneyRest(getBone: (name: string) => THREE.Bone | null): KenneyRestData {
+  const q = (b: THREE.Bone) => {
+    const w = new THREE.Quaternion();
+    b.getWorldQuaternion(w);
+    return w;
+  };
+  const p = (b: THREE.Bone) => new THREE.Vector3().setFromMatrixPosition(b.matrixWorld);
+
+  const mk = (name: string): RestBone => {
+    const b = getBone(name);
+    if (!b) throw new Error(`Kenney skeleton missing rest bone: ${name}`);
+    const parent = b.parent as THREE.Bone | null;
+    return {
+      restWorld: q(b),
+      restLocal: b.quaternion.clone(),
+      restPos: p(b),
+      parentName: parent && parent.isBone ? parent.name : "",
+    };
+  };
+
+  const chain = (boneName: string, childName: string): ChainBone => {
+    const a = mk(boneName);
+    const b = mk(childName);
+    return {
+      ...a,
+      childDir: new THREE.Vector3().subVectors(b.restPos, a.restPos).normalize(),
+      segLen: a.restPos.distanceTo(b.restPos),
+    };
+  };
+
+  const Hips = mk("Hips");
+  const Spine = mk("Spine");
+  const Chest = mk("Chest");
+  const UpperChest = mk("UpperChest");
+  const Neck = mk("Neck");
+  const Head = mk("Head");
+  const HipsCtrl = mk("HipsCtrl");
+
+  return {
+    torso: { Hips, Spine, Chest, Neck, Head, UpperChest, HipsCtrl },
+    chains: {
+      shoulderL: chain("LeftShoulder", "LeftArm"),
+      armL: chain("LeftArm", "LeftForeArm"),
+      foreL: mk("LeftForeArm"),
+      shoulderR: chain("RightShoulder", "RightArm"),
+      armR: chain("RightArm", "RightForeArm"),
+      foreR: mk("RightForeArm"),
+      thighL: chain("LeftUpLeg", "LeftLeg"),
+      shinL: chain("LeftLeg", "LeftFoot"),
+      footL: mk("LeftFoot"),
+      thighR: chain("RightUpLeg", "RightLeg"),
+      shinR: chain("RightLeg", "RightFoot"),
+      footR: mk("RightFoot"),
+    },
+  };
 }
 
 // ----------------------------------------------------------------- emit
 
-const BONES_ALL: BoneName[] = [
-  "hips", "spine", "chest", "neck", "head",
-  "upperArmL", "upperArmR", "forearmL", "forearmR", "handL", "handR",
-  "thighL", "thighR", "shinL", "shinR", "footL", "footR",
-];
-
 const FWD = new THREE.Vector3(0, 0, 1);
 const BACK = new THREE.Vector3(0, 0, -1);
 
-/** Apply a pose key to the scaffold and return the resulting local quats. */
-function applyKey(s: Scaffold, key: PoseKey, quats: Map<BoneName, THREE.Quaternion>) {
-  const { torso, limbs } = key;
-  // The pose keys are authored in the old rig's frame (left = −X); this
-  // scaffold is built in the Kenney frame (left = +X), which is an X
-  // reflection of the old frame. Under that reflection an X-rotation keeps
-  // its sign but Y (yaw) and Z (roll) rotations flip, so the authored eulers
-  // are mirrored here (rx, −ry, −rz).
-  const setE = (name: BoneName, e: Euler | undefined) => {
-    const b = s.bones[name];
-    if (e) b.rotation.set(e[0], -e[1], -e[2]);
-    else b.rotation.set(0, 0, 0);
-  };
-  for (const n of BONES_ALL) setE(n, torso[n as keyof TorsoPose] as Euler | undefined);
+/** The pose keys are authored at 1.75 m scale in the old frame (left = −X);
+ *  the skeleton is smaller and left = +X, so targets are X-mirrored and
+ *  scaled into the skeleton's own rest frame (hips/ground aligned). */
+const toSkel = (v: V3, s: number, dy: number): THREE.Vector3 =>
+  new THREE.Vector3(-v[0] * s, v[1] * s + dy, v[2] * s);
 
-  s.group.updateMatrixWorld(true);  // solve legs from the hip joints. Each bone's LOCAL rotation is derived from
-  // its parent's world rotation (parent⁻¹ × target-world) so the FK chain ends
-  // up pointing exactly at the IK targets.
-  const _pw = new THREE.Quaternion();
-  const _wr = new THREE.Quaternion();
-  const orientTo = (bone: THREE.Group, parentWorld: THREE.Quaternion, restAxis: THREE.Vector3, dir: THREE.Vector3) => {
-    _wr.setFromUnitVectors(restAxis, dir);
-    _pw.copy(parentWorld).invert().multiply(_wr);
-    bone.quaternion.copy(_pw);
-  };
-
-  const solve = (hip: THREE.Group, footTarget: V3, footRx: number, leg: "L" | "R") => {
-    const origin = new THREE.Vector3().setFromMatrixPosition(hip.matrixWorld);
-    // mirror the authored X into the +X-left scaffold frame
-    const target = new THREE.Vector3(-footTarget[0], footTarget[1], footTarget[2]);
-    const { dirA, dirB } = twoBoneIK(origin, target, LEN.thigh, LEN.shin, FWD);
-    const thigh = s.bones[leg === "L" ? "thighL" : "thighR"];
-    const shin = s.bones[leg === "L" ? "shinL" : "shinR"];
-    const foot = s.bones[leg === "L" ? "footL" : "footR"];
-    const hipW = new THREE.Quaternion().setFromRotationMatrix(hip.matrixWorld);
-    orientTo(thigh, hipW, restAxisOf(thigh, shin), dirA);
-    s.group.updateMatrixWorld(true);
-    const thighW = new THREE.Quaternion().setFromRotationMatrix(thigh.matrixWorld);
-    orientTo(shin, thighW, restAxisOf(shin, foot), dirB);
-    // toe pitch about the foot's LOCAL X axis (the sideways axis). The
-    // retarget keeps the Kenney foot's rest orientation and applies this
-    // delta on top, so a positive footRx dips the toes toward the road. The
-    // sign is mirrored here because the live skeleton's world frame is a
-    // 180° Y rotation away from the authoring frame.
-    foot.quaternion.set(-Math.sin(footRx / 2), 0, 0, Math.cos(footRx / 2));
-  };
-  solve(s.bones.thighL, limbs.footL, limbs.footRxL ?? 0, "L");
-  solve(s.bones.thighR, limbs.footR, limbs.footRxR ?? 0, "R");
-
-  // solve arms from the shoulders (same parent-frame compensation)
-  const solveArm = (shoulder: THREE.Group, handTarget: V3, side: "L" | "R") => {
-    const origin = new THREE.Vector3().setFromMatrixPosition(shoulder.matrixWorld);
-    // mirror the authored X into the +X-left scaffold frame
-    const target = new THREE.Vector3(-handTarget[0], handTarget[1], handTarget[2]);
-    const { dirA, dirB } = twoBoneIK(origin, target, LEN.upperArm, LEN.foreArm, BACK);
-    const ua = s.bones[side === "L" ? "upperArmL" : "upperArmR"];
-    const fa = s.bones[side === "L" ? "forearmL" : "forearmR"];
-    const hand = s.bones[side === "L" ? "handL" : "handR"];
-    const chestW = new THREE.Quaternion().setFromRotationMatrix(s.bones.chest.matrixWorld);
-    orientTo(ua, chestW, restAxisOf(ua, fa), dirA);
-    s.group.updateMatrixWorld(true);
-    const uaW = new THREE.Quaternion().setFromRotationMatrix(ua.matrixWorld);
-    orientTo(fa, uaW, restAxisOf(fa, hand), dirB);
-    hand.quaternion.set(0, 0, 0, 1);
-  };
-  solveArm(s.bones.upperArmL, limbs.handL, "L");
-  solveArm(s.bones.upperArmR, limbs.handR, "R");
-
-  for (const n of BONES_ALL) quats.get(n)!.copy(s.bones[n].quaternion);
+function eulerQuat(e: Euler, out: THREE.Quaternion): THREE.Quaternion {
+  const eu = new THREE.Euler(e[0], -e[1], -e[2], "XYZ"); // mirror yaw/roll
+  return out.setFromEuler(eu);
 }
 
-let _scaffold: Scaffold | null = null;
-function scaffold(): Scaffold {
-  if (!_scaffold) _scaffold = buildScaffold();
-  return _scaffold;
-}
-
-/** Build one clip from its pose keys (looping clips wrap back to key 0). */
-function emitClip(name: string, keys: PoseKey[], loop: boolean): THREE.AnimationClip {
-  const s = scaffold();
-  const quats = new Map<BoneName, THREE.Quaternion>();
-  for (const n of BONES_ALL) quats.set(n, new THREE.Quaternion());
-
-  // loop: append a copy of the first key at the end for a seamless cycle
+/** Build one clip for a state directly on the Kenney skeleton. */
+function emitState(
+  keys: PoseKey[],
+  loop: boolean,
+  rest: KenneyRestData,
+  boneTrackValues: Map<string, number[]>,
+): { times: number[]; loop: boolean } {
   const wrapT = keys[keys.length - 1].t + (keys.length > 1 ? keys[1].t - keys[0].t : 0.55);
   const all = [...keys];
   if (loop) all.push({ t: wrapT, torso: keys[0].torso, limbs: keys[0].limbs, bob: keys[0].bob });
+  const times = all.map((k) => k.t);
 
-  const times: number[] = [];
-  for (const k of all) times.push(k.t);
+  const T = rest.torso;
+  const C = rest.chains;
 
-  // evaluate every key once, snapshotting all bone local quats per key
-  const frames: THREE.Quaternion[][] = [];
-  for (const k of all) {
-    applyKey(s, k, quats);
-    frames.push(BONES_ALL.map((n) => quats.get(n)!.clone()));
-  }
+  // Author at the game's 1.75 m scale, then scale/translate into the skeleton's
+  // own rest frame so the IK solves against the real geometry. The authored
+  // foot-low (~0.05) maps to the skeleton's ankle-rest height.
+  const groundSkel = Math.min(C.footL.restPos.y, C.footR.restPos.y);
+  const s = Math.max(0.001, (T.Head.restPos.y - groundSkel) / 1.75);
+  const dy = groundSkel - 0.05 * s;
 
-  const tracks: THREE.KeyframeTrack[] = [];
-  for (let bi = 0; bi < BONES_ALL.length; bi++) {
-    const vals: number[] = [];
-    for (const f of frames) {
-      const q = f[bi];
-      vals.push(q.x, q.y, q.z, q.w);
+  const qA = new THREE.Quaternion();
+  const qB = new THREE.Quaternion();
+  const qC = new THREE.Quaternion();
+  const qD = new THREE.Quaternion();
+  const qE = new THREE.Quaternion();
+
+  // per-bone local-quat accumulation (map name → [x,y,z,w] per keyframe)
+  const push = (boneName: string, q: THREE.Quaternion) => {
+    let arr = boneTrackValues.get(boneName);
+    if (!arr) {
+      arr = [];
+      boneTrackValues.set(boneName, arr);
     }
-    tracks.push(new THREE.QuaternionKeyframeTrack(`${BONES_ALL[bi]}.quaternion`, times, vals));
+    arr.push(q.x, q.y, q.z, q.w);
+  };
+
+  for (const key of all) {
+    const { torso, limbs } = key;
+
+    // ---- torso chain (local = rest × authored delta, world propagated) ----
+    const W = new Map<string, THREE.Quaternion>(); // animated world quats
+    const parentFor = (name: string): THREE.Quaternion =>
+      W.get(name) ?? T[name as keyof typeof T]?.restWorld ?? new THREE.Quaternion();
+    // Parents are always processed before children in a standard spine, so the
+    // world quats compose correctly whatever the real hierarchy looks like
+    // (UpperChest between Chest and Neck, or Chest → Neck directly).
+    const torsoList = ["Hips", "Spine", "Chest", "UpperChest", "Neck", "Head"] as const;
+    for (const boneName of torsoList) {
+      const rb = T[boneName];
+      const delta = torso[boneName.toLowerCase() as keyof TorsoPose];
+      if (delta) eulerQuat(delta, qA);
+      else qA.identity();
+      qB.copy(rb.restLocal).multiply(qA); // local = rest × delta
+      push(boneName, qB);
+      const parentW = rb.parentName === "HipsCtrl" ? T.HipsCtrl.restWorld : parentFor(rb.parentName);
+      const w = qC.copy(parentW).multiply(qB);
+      W.set(boneName, w.clone());
+    }
+
+    // ---- legs ----
+    const solveLeg = (
+      thigh: ChainBone, shin: ChainBone, foot: RestBone,
+      targetV3: V3, footRx: number, prefix: string,
+    ) => {
+      const origin = thigh.restPos;
+      const target = toSkel(targetV3, s, dy);
+      const { dirA, dirB } = twoBoneIK(origin, target, thigh.segLen, shin.segLen, FWD);
+      // thigh: rotate so its rest child direction points along dirA
+      qA.setFromUnitVectors(thigh.childDir, dirA).multiply(thigh.restWorld);
+      const hipsW = parentFor(thigh.parentName);
+      qB.copy(hipsW).invert().multiply(qA);
+      push(prefix + "UpLeg", qB);
+      const thighWorld = qC.copy(hipsW).multiply(qB);
+      // shin
+      qD.setFromUnitVectors(shin.childDir, dirB).multiply(shin.restWorld);
+      qE.copy(thighWorld).invert().multiply(qD);
+      push(prefix + "Leg", qE);
+      // foot: rest orientation × toe-pitch delta (keeps the toes pointing down)
+      qA.set(-Math.sin(footRx / 2), 0, 0, Math.cos(footRx / 2));
+      qB.copy(foot.restLocal).multiply(qA);
+      push(prefix + "Foot", qB);
+    };
+    solveLeg(C.thighL, C.shinL, C.footL, limbs.footL, limbs.footRxL ?? 0, "Left");
+    solveLeg(C.thighR, C.shinR, C.footR, limbs.footR, limbs.footRxR ?? 0, "Right");
+
+    // ---- arms (shoulder pivots — the wrist is the IK end, the hand hangs) ----
+    const solveArm = (
+      shoulder: ChainBone, arm: ChainBone, fore: RestBone,
+      targetV3: V3, prefix: string,
+    ) => {
+      const origin = shoulder.restPos;
+      const target = toSkel(targetV3, s, dy);
+      const { dirA, dirB } = twoBoneIK(origin, target, shoulder.segLen, arm.segLen, BACK);
+      qA.setFromUnitVectors(shoulder.childDir, dirA).multiply(shoulder.restWorld);
+      const parentW = parentFor(shoulder.parentName);
+      qB.copy(parentW).invert().multiply(qA);
+      push(prefix + "Shoulder", qB);
+      const shoulderWorld = qC.copy(parentW).multiply(qB);
+      qD.setFromUnitVectors(arm.childDir, dirB).multiply(arm.restWorld);
+      qE.copy(shoulderWorld).invert().multiply(qD);
+      push(prefix + "Arm", qE);
+      // wrist keeps its rest orientation (the hand bone beyond it is unmapped)
+      push(prefix + "ForeArm", fore.restLocal);
+    };
+    solveArm(C.shoulderL, C.armL, C.foreL, limbs.handL, "Left");
+    solveArm(C.shoulderR, C.armR, C.foreR, limbs.handR, "Right");
   }
 
-  // vertical body bob / drop
-  const bobT: number[] = [];
-  const bobV: number[] = [];
-  for (const k of all) {
-    bobT.push(k.t);
-    bobV.push(0, k.bob ?? 0, 0);
-  }
-  tracks.push(new THREE.VectorKeyframeTrack("body.position", bobT, bobV));
-
-  const duration = all[all.length - 1].t;
-  const clip = new THREE.AnimationClip(name, loop ? undefined : duration, tracks);
-  if (!loop) clip.duration = duration;
-  return clip;
+  return { times, loop };
 }
-
-// -------------------------------------------------------------- public API
 
 /**
  * Build the Kenney-native pose clips for every gameplay state (idle is the
  * model's own real animation and is supplied separately by kenneyCharacter).
  */
-export function buildKenneyPoseClips(): Record<Exclude<AnimState, "idle">, THREE.AnimationClip> {
+export function buildKenneyPoseClips(rest: KenneyRestData): Record<Exclude<AnimState, "idle">, THREE.AnimationClip> {
   const out = {} as Record<Exclude<AnimState, "idle">, THREE.AnimationClip>;
   for (const [state, keys] of Object.entries(SOURCES) as [Exclude<AnimState, "idle">, PoseKey[]][]) {
-    out[state] = emitClip(state, keys, state !== "landing" && state !== "hit");
-  }
-  return out;
-}
+    const values = new Map<string, number[]>();
+    const { times, loop } = emitState(keys, state !== "landing" && state !== "hit", rest, values);
 
-/** The scaffold rig the pose clips are authored against (for the retarget). */
-export function kenneyPoseScaffold(): THREE.Group {
-  return scaffold().group;
-}
+    const tracks: THREE.KeyframeTrack[] = [];
+    for (const [boneName, vals] of values) {
+      tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, times, vals));
+    }
+    // vertical body bob / drop
+    const bobT: number[] = [];
+    const bobV: number[] = [];
+    for (const k of keys) {
+      bobT.push(k.t);
+      bobV.push(0, k.bob ?? 0, 0);
+    }
+    tracks.push(new THREE.VectorKeyframeTrack("body.position", bobT, bobV));
 
-// ---- DEV diagnostics ------------------------------------------------------
-
-/** Re-pose the scaffold at a keyframe and report bone world positions. */
-export function kenneyPoseDebug(state: string, keyIdx: number): Record<string, number[]> | null {
-  if (!import.meta.env.DEV) return null;
-  const keys = SOURCES[state as Exclude<AnimState, "idle">];
-  if (!keys) return null;
-  const s = scaffold();
-  const quats = new Map<BoneName, THREE.Quaternion>();
-  for (const n of BONES_ALL) quats.set(n, new THREE.Quaternion());
-  applyKey(s, keys[keyIdx], quats);
-  s.group.updateMatrixWorld(true);
-  const out: Record<string, number[]> = {};
-  for (const n of BONES_ALL) {
-    const p = new THREE.Vector3().setFromMatrixPosition(s.bones[n].matrixWorld);
-    const q = new THREE.Quaternion().setFromRotationMatrix(s.bones[n].matrixWorld);
-    out[n] = [...[p.x, p.y, p.z].map((v) => Math.round(v * 100) / 100), ...[q.x, q.y, q.z, q.w].map((v) => Math.round(v * 100) / 100)];
+    const duration = times[times.length - 1];
+    const clip = new THREE.AnimationClip(state, loop ? undefined : duration, tracks);
+    if (!loop) clip.duration = duration;
+    out[state] = clip;
   }
   return out;
 }
