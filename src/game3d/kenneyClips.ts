@@ -351,19 +351,26 @@ function buildScaffold(): Scaffold {
   // (elbows/hands hang down-out, legs hang down). The IK solve below swings
   // each bone from ITS OWN rest axis, so a pose always reads as a rotation
   // relative to the character's natural stance.
-  const upperArmL = mk(chest, "upperArmL", -0.21, 0.32, -0.08);
-  const forearmL = mk(upperArmL, "forearmL", -0.12, -0.26, 0.1);
-  const handL = mk(forearmL, "handL", -0.09, -0.31, -0.14);
-  const upperArmR = mk(chest, "upperArmR", 0.21, 0.32, -0.08);
-  const forearmR = mk(upperArmR, "forearmR", 0.12, -0.26, 0.1);
-  const handR = mk(forearmR, "handR", 0.09, -0.31, -0.14);
+  // NOTE: this scaffold is built in the KENNEY convention (left limb at +X,
+  // forward = +Z, up = +Y) — it is the pose the retarget reproduces on the
+  // real skeleton, so its frame must match the skeleton's frame (the FBX
+  // stores LeftUpLeg at +X relative to Hips). The pose keys below are
+  // authored in the old rig's convention (left = −X); applyKey mirrors the
+  // limb targets and the yaw/roll eulers when solving, so the emitted local
+  // quats come out in this +X-left frame with no scale tricks involved.
+  const upperArmL = mk(chest, "upperArmL", 0.21, 0.32, -0.08);
+  const forearmL = mk(upperArmL, "forearmL", 0.12, -0.26, 0.1);
+  const handL = mk(forearmL, "handL", 0.09, -0.31, -0.14);
+  const upperArmR = mk(chest, "upperArmR", -0.21, 0.32, -0.08);
+  const forearmR = mk(upperArmR, "forearmR", -0.12, -0.26, 0.1);
+  const handR = mk(forearmR, "handR", -0.09, -0.31, -0.14);
 
-  const thighL = mk(hips, "thighL", -0.13, 0.04, -0.02);
-  const shinL = mk(thighL, "shinL", -0.05, -0.34, -0.05);
-  const footL = mk(shinL, "footL", 0.05, -0.33, 0.21);
-  const thighR = mk(hips, "thighR", 0.13, 0.04, -0.02);
-  const shinR = mk(thighR, "shinR", 0.05, -0.34, -0.05);
-  const footR = mk(shinR, "footR", -0.05, -0.33, 0.21);
+  const thighL = mk(hips, "thighL", 0.13, 0.04, -0.02);
+  const shinL = mk(thighL, "shinL", 0.05, -0.34, -0.05);
+  const footL = mk(shinL, "footL", -0.05, -0.33, 0.21);
+  const thighR = mk(hips, "thighR", -0.13, 0.04, -0.02);
+  const shinR = mk(thighR, "shinR", -0.05, -0.34, -0.05);
+  const footR = mk(shinR, "footR", 0.05, -0.33, 0.21);
 
   const bones: Record<BoneName, THREE.Group> = {
     hips, spine, chest, neck, head,
@@ -429,9 +436,14 @@ const BACK = new THREE.Vector3(0, 0, -1);
 /** Apply a pose key to the scaffold and return the resulting local quats. */
 function applyKey(s: Scaffold, key: PoseKey, quats: Map<BoneName, THREE.Quaternion>) {
   const { torso, limbs } = key;
+  // The pose keys are authored in the old rig's frame (left = −X); this
+  // scaffold is built in the Kenney frame (left = +X), which is an X
+  // reflection of the old frame. Under that reflection an X-rotation keeps
+  // its sign but Y (yaw) and Z (roll) rotations flip, so the authored eulers
+  // are mirrored here (rx, −ry, −rz).
   const setE = (name: BoneName, e: Euler | undefined) => {
     const b = s.bones[name];
-    if (e) b.rotation.set(e[0], e[1], e[2]);
+    if (e) b.rotation.set(e[0], -e[1], -e[2]);
     else b.rotation.set(0, 0, 0);
   };
   for (const n of BONES_ALL) setE(n, torso[n as keyof TorsoPose] as Euler | undefined);
@@ -449,7 +461,8 @@ function applyKey(s: Scaffold, key: PoseKey, quats: Map<BoneName, THREE.Quaterni
 
   const solve = (hip: THREE.Group, footTarget: V3, footRx: number, leg: "L" | "R") => {
     const origin = new THREE.Vector3().setFromMatrixPosition(hip.matrixWorld);
-    const target = new THREE.Vector3(footTarget[0], footTarget[1], footTarget[2]);
+    // mirror the authored X into the +X-left scaffold frame
+    const target = new THREE.Vector3(-footTarget[0], footTarget[1], footTarget[2]);
     const { dirA, dirB } = twoBoneIK(origin, target, LEN.thigh, LEN.shin, FWD);
     const thigh = s.bones[leg === "L" ? "thighL" : "thighR"];
     const shin = s.bones[leg === "L" ? "shinL" : "shinR"];
@@ -459,7 +472,12 @@ function applyKey(s: Scaffold, key: PoseKey, quats: Map<BoneName, THREE.Quaterni
     s.group.updateMatrixWorld(true);
     const thighW = new THREE.Quaternion().setFromRotationMatrix(thigh.matrixWorld);
     orientTo(shin, thighW, restAxisOf(shin, foot), dirB);
-    foot.quaternion.set(0, 0, Math.sin(footRx / 2), Math.cos(footRx / 2));
+    // toe pitch about the foot's LOCAL X axis (the sideways axis). The
+    // retarget keeps the Kenney foot's rest orientation and applies this
+    // delta on top, so a positive footRx dips the toes toward the road. The
+    // sign is mirrored here because the live skeleton's world frame is a
+    // 180° Y rotation away from the authoring frame.
+    foot.quaternion.set(-Math.sin(footRx / 2), 0, 0, Math.cos(footRx / 2));
   };
   solve(s.bones.thighL, limbs.footL, limbs.footRxL ?? 0, "L");
   solve(s.bones.thighR, limbs.footR, limbs.footRxR ?? 0, "R");
@@ -467,7 +485,8 @@ function applyKey(s: Scaffold, key: PoseKey, quats: Map<BoneName, THREE.Quaterni
   // solve arms from the shoulders (same parent-frame compensation)
   const solveArm = (shoulder: THREE.Group, handTarget: V3, side: "L" | "R") => {
     const origin = new THREE.Vector3().setFromMatrixPosition(shoulder.matrixWorld);
-    const target = new THREE.Vector3(handTarget[0], handTarget[1], handTarget[2]);
+    // mirror the authored X into the +X-left scaffold frame
+    const target = new THREE.Vector3(-handTarget[0], handTarget[1], handTarget[2]);
     const { dirA, dirB } = twoBoneIK(origin, target, LEN.upperArm, LEN.foreArm, BACK);
     const ua = s.bones[side === "L" ? "upperArmL" : "upperArmR"];
     const fa = s.bones[side === "L" ? "forearmL" : "forearmR"];

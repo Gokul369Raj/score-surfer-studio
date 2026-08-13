@@ -149,6 +149,15 @@ function retargetClip(
   const values = new Map<RetargetNode, number[]>();
   for (const n of nodeList) values.set(n, []);
 
+  // End bones (feet, hands, head — nothing in the mapped chain hangs off
+  // them) must KEEP the Kenney rest orientation: this rig bakes a 180°-ish
+  // Z twist into the feet (so the toes point down) and a ~90° Y twist into
+  // the left hand. Overwriting those with an identity-derived quaternion is
+  // what flipped the toes up and twisted the wrist. They only get the
+  // scaffold's authored local delta (foot pitch, head tilt) applied on top
+  // of their rest pose.
+  const endBones = new Set(nodeList.filter((n) => n.children.length === 0));
+
   const mixer = new THREE.AnimationMixer(myRoot);
   const action = mixer.clipAction(src);
   action.play();
@@ -174,7 +183,7 @@ function retargetClip(
     const kChildren = n.kBone.children.filter((c) => (c as THREE.Bone).isBone) as THREE.Bone[];
     const myChild = n.myObj.children.find((c) => c !== undefined && c !== null) as THREE.Object3D | undefined;
     if (!kChildren.length || !myChild) {
-      // end bone (foot/hand): keep the source rig's orientation
+      // end bone (foot/hand/head): handled by the rest-preserving branch below
       boneQ.set(n, new THREE.Quaternion());
       continue;
     }
@@ -191,6 +200,7 @@ function retargetClip(
   }
 
   const tmp = new THREE.Quaternion();
+  const tmp2 = new THREE.Quaternion();
   const target = new THREE.Quaternion();
   const kWorld = new Map<RetargetNode, THREE.Quaternion>();
 
@@ -210,6 +220,11 @@ function retargetClip(
           // intermediate control bone — stays at its local rest pose
           local = n.kBone.quaternion;
         }
+      } else if (endBones.has(n)) {
+        // end bone: rest orientation × the scaffold's authored local delta
+        // (foot pitch / head tilt). Preserving the rest is what keeps the
+        // toes pointing down and the hands untwisted.
+        local = tmp2.copy(n.kBone.quaternion).multiply(n.myObj.quaternion);
       } else {
         n.myObj.getWorldQuaternion(target); // source rig's world rotation
         target.multiply(boneQ.get(n) ?? new THREE.Quaternion()); // + child-axis correction
@@ -303,12 +318,9 @@ async function buildKenneyPlayer(): Promise<KenneyPlayerModel> {
   // model's real joint positions; the IK-authored clips play on it and the
   // retarget samples its world rotations (see kenneyClips.ts).
   const myRoot = kenneyPoseScaffold();
-  // The scaffold is authored in the old rig's convention (left limb at −X),
-  // but the Kenney FBX stores its "left" bones at +X (Hips' LeftUpLeg child
-  // sits at (0.2, 0.06, 0)). Reflecting the scaffold about the X axis maps
-  // its frame onto the Kenney skeleton's frame — without it every retargeted
-  // pose comes out left/right mirrored (left limbs pulled toward centre).
-  myRoot.scale.x = -1;
+  // The scaffold is built in the Kenney skeleton's own frame (left limb at
+  // +X, matching how the FBX stores LeftUpLeg/LeftArm), so the retarget below
+  // maps it onto the skeleton directly — no mirror/scale tricks needed.
   myRoot.updateMatrixWorld(true);
 
   // The Kenney rig has IK/FK control bones (HipsCtrl, LeftFootCtrl, …) above
